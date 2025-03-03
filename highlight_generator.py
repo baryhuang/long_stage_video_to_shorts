@@ -822,6 +822,7 @@ def create_highlight_video(
     Create highlight video in 9:16 format with titles and subtitles, styled like a church service video
     First creates a preview for confirmation, then proceeds with video creation if approved.
     Uses the segment title as the main title text.
+    The main video section will be in 1:1 ratio.
     
     Args:
         input_path: Path to input video
@@ -867,37 +868,60 @@ def create_highlight_video(
     output_height = 1920
     logger.info(f"Output dimensions (9:16): {output_width}x{output_height} (width x height)")
     
-    # Keep original video aspect ratio but scale to fit width
-    orig_height, orig_width = processed_clip.size[1], processed_clip.size[0]
-    scale_factor = output_width / orig_width
-    scaled_height = int(orig_height * scale_factor)
-    logger.info(f"Scaled video dimensions: {output_width}x{scaled_height} (width x height)")
+    # Calculate dimensions for 1:1 video section
+    video_section_size = output_width  # Square video section
+    logger.info(f"Video section dimensions (1:1): {video_section_size}x{video_section_size} (width x height)")
     
-    # Resize video while maintaining aspect ratio
-    processed_clip = processed_clip.resize(width=output_width, height=scaled_height)
+    # Resize video while maintaining aspect ratio to fit the square
+    orig_height, orig_width = processed_clip.size[1], processed_clip.size[0]
+    if orig_width > orig_height:
+        # For landscape video, fit to height
+        scale_factor = video_section_size / orig_height
+        scaled_width = int(orig_width * scale_factor)
+        scaled_height = video_section_size
+        # Crop excess width
+        x_offset = (scaled_width - video_section_size) // 2
+        processed_clip = processed_clip.resize(width=scaled_width, height=scaled_height)
+        processed_clip = processed_clip.crop(x1=x_offset, y1=0, x2=x_offset + video_section_size, y2=video_section_size)
+    else:
+        # For portrait video, fit to width
+        scale_factor = video_section_size / orig_width
+        scaled_width = video_section_size
+        scaled_height = int(orig_height * scale_factor)
+        # Crop excess height
+        y_offset = (scaled_height - video_section_size) // 2
+        processed_clip = processed_clip.resize(width=scaled_width, height=scaled_height)
+        processed_clip = processed_clip.crop(x1=0, y1=y_offset, x2=video_section_size, y2=y_offset + video_section_size)
+    
+    logger.info(f"Final video dimensions: {video_section_size}x{video_section_size} (width x height)")
     
     # Create a black background for the 9:16 format
     black_bg = ColorClip(size=(output_width, output_height), color=(0, 0, 0))
     black_bg = black_bg.set_duration(video.duration)
     
-    # Position the video in the center
-    video_y = (output_height - scaled_height) // 2
-    video_pos = ('center', video_y)
-    logger.info(f"Video position: center, y={video_y} (distance from top)")
-    
-    # Create title areas with proper styling
+    # Position the video in the center vertically with more space for the square
+    # Calculate positions to center the 1:1 video with proper margins
     title_margin = 40
     church_name_height = 100
     main_title_height = 150
     service_info_height = 80
     
-    # Calculate text positions
-    church_name_y = title_margin
-    main_title_y = title_margin + church_name_height + main_title_height//2
-    service_info_y = title_margin + church_name_height + main_title_height + service_info_height//2
+    # Calculate total height of text elements
+    total_text_height = (title_margin + church_name_height + main_title_height + 
+                        service_info_height + title_margin)
+    
+    # Position video after the top text elements with some margin
+    video_y = total_text_height + title_margin
+    video_pos = ('center', video_y)
+    logger.info(f"Video position: center, y={video_y} (distance from top)")
     
     # Initialize clips list
     clips_to_combine = [black_bg, processed_clip.set_position(video_pos)]
+    
+    # Calculate text positions relative to the new video position
+    church_name_y = title_margin
+    main_title_y = title_margin + church_name_height + main_title_height//2
+    service_info_y = title_margin + church_name_height + main_title_height + service_info_height//2
     
     # Add logo or church name
     if logo_path and os.path.exists(logo_path):
@@ -1248,6 +1272,8 @@ def load_state(video_path: str, state_name: str) -> Optional[Any]:
 def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float = 2.0) -> VideoFileClip:
     """
     Process video with static zoom and horizontal person tracking.
+    Centers the person in frame while respecting video boundaries.
+    Uses responsive tracking without speed limits for immediate following.
     
     Args:
         clip: Input VideoFileClip
@@ -1270,9 +1296,32 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
     # Store previous positions for smooth tracking
     prev_center_x = None
     prev_offset_x = None
-    smoothing_factor = 0.1  # Reduced from 0.3 to 0.1 for slower movement
-    max_speed = 5  # Maximum pixels per frame the camera can move
+    smoothing_factor = 0.3  # Increased for more immediate response
     
+    def get_person_center(landmarks, frame_width, frame_height):
+        """Calculate the center point of the person using multiple body landmarks"""
+        # Key points for center calculation
+        key_points = [
+            mp.solutions.pose.PoseLandmark.LEFT_SHOULDER,
+            mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER,
+            mp.solutions.pose.PoseLandmark.LEFT_HIP,
+            mp.solutions.pose.PoseLandmark.RIGHT_HIP,
+            mp.solutions.pose.PoseLandmark.NOSE
+        ]
+        
+        points = []
+        for point in key_points:
+            landmark = landmarks.landmark[point]
+            if landmark.visibility > 0.5:  # Only use visible landmarks
+                points.append(landmark.x)
+        
+        if points:
+            # Use average of visible points
+            return sum(points) / len(points) * frame_width
+        else:
+            # Fallback to frame center if no points are visible
+            return frame_width / 2
+
     def process_frame(frame):
         nonlocal prev_center_x, prev_offset_x
         
@@ -1293,94 +1342,70 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
             # Create zoomed frame
             zoomed_frame = cv2.resize(frame, (zoomed_width, zoomed_height))
             
+            # Maximum possible offset (half of the extra width from zooming)
+            max_offset_x = (zoomed_width - frame_width) // 2
+            
             if results and results.pose_landmarks:
-                # Calculate the center of the person (using shoulders as reference)
-                left_shoulder = results.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER]
-                right_shoulder = results.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER]
-                current_center_x = (left_shoulder.x + right_shoulder.x) / 2 * frame_width
+                # Calculate person center using multiple body points
+                current_center_x = get_person_center(results.pose_landmarks, frame_width, frame_height)
                 
-                # Apply double smoothing - first to the center position
+                # Apply light smoothing to center position
                 if prev_center_x is not None:
-                    # Limit the maximum change in position
-                    max_center_change = max_speed
-                    center_change = current_center_x - prev_center_x
-                    limited_change = np.clip(center_change, -max_center_change, max_center_change)
-                    person_center_x = prev_center_x + limited_change
-                    
-                    # Apply smoothing after limiting speed
-                    person_center_x = prev_center_x + smoothing_factor * (person_center_x - prev_center_x)
+                    person_center_x = prev_center_x + smoothing_factor * (current_center_x - prev_center_x)
                 else:
                     person_center_x = current_center_x
                 
                 # Update previous center
                 prev_center_x = person_center_x
                 
-                # Calculate horizontal offset to keep person centered
-                max_offset_x = zoomed_width - frame_width
-                target_offset_x = frame_width/2 - person_center_x
+                # Calculate target offset to center the person
+                # Positive offset moves frame left, negative moves right
+                target_offset_x = (frame_width/2 - person_center_x) * 1.2  # 1.2 factor for more aggressive centering
                 
-                # Apply second smoothing to the camera movement
+                # Limit target offset to valid range
+                target_offset_x = np.clip(target_offset_x, -max_offset_x, max_offset_x)
+                
+                # Apply smoothing to camera movement
                 if prev_offset_x is not None:
-                    # Limit the maximum change in offset
-                    max_offset_change = max_speed
-                    offset_change = target_offset_x - prev_offset_x
-                    limited_offset_change = np.clip(offset_change, -max_offset_change, max_offset_change)
-                    offset_x = prev_offset_x + limited_offset_change
-                    
-                    # Apply smoothing after limiting speed
-                    offset_x = prev_offset_x + smoothing_factor * (offset_x - prev_offset_x)
+                    offset_x = prev_offset_x + smoothing_factor * (target_offset_x - prev_offset_x)
                 else:
                     offset_x = target_offset_x
                 
                 # Ensure offset stays within bounds
-                offset_x = np.clip(offset_x, -max_offset_x/2, max_offset_x/2)
+                offset_x = np.clip(offset_x, -max_offset_x, max_offset_x)
                 
                 # Update previous offset
                 prev_offset_x = offset_x
                 
-                # Calculate vertical center crop (static, no vertical tracking)
-                start_y = (zoomed_height - frame_height) // 2
-                end_y = start_y + frame_height
-                
-                # Calculate horizontal crop based on person position
-                start_x = int((zoomed_width - frame_width) // 2 - offset_x)
-                end_x = start_x + frame_width
-                
-                # Ensure crop coordinates are within bounds
-                start_x = max(0, min(start_x, zoomed_width - frame_width))
-                end_x = min(zoomed_width, start_x + frame_width)
             else:
-                # If no person detected or processing failed, use previous positions if available
+                # If no person detected, gradually return to center
                 if prev_offset_x is not None:
-                    # Keep the previous offset but slowly move towards center
+                    # Quick return to center when no person detected
                     target_offset_x = 0
-                    max_offset_change = max_speed / 2  # Even slower return to center
-                    offset_change = target_offset_x - prev_offset_x
-                    limited_offset_change = np.clip(offset_change, -max_offset_change, max_offset_change)
-                    offset_x = prev_offset_x + limited_offset_change
-                    
-                    start_y = (zoomed_height - frame_height) // 2
-                    end_y = start_y + frame_height
-                    
-                    start_x = int((zoomed_width - frame_width) // 2 - offset_x)
-                    end_x = start_x + frame_width
-                    
-                    # Update previous offset
+                    offset_x = prev_offset_x + smoothing_factor * 2 * (target_offset_x - prev_offset_x)  # Faster return
                     prev_offset_x = offset_x
-                    
-                    # Ensure crop coordinates are within bounds
-                    start_x = max(0, min(start_x, zoomed_width - frame_width))
-                    end_x = min(zoomed_width, start_x + frame_width)
                 else:
-                    # If no previous offset, return centered crop
-                    start_y = (zoomed_height - frame_height) // 2
-                    end_y = start_y + frame_height
-                    start_x = (zoomed_width - frame_width) // 2
-                    end_x = start_x + frame_width
+                    offset_x = 0
             
-            # Crop the zoomed frame
-            processed_frame = zoomed_frame[start_y:end_y, start_x:end_x]
-            return processed_frame
+            # Calculate crop coordinates
+            # Vertical center crop (static)
+            start_y = (zoomed_height - frame_height) // 2
+            end_y = start_y + frame_height
+            
+            # Horizontal crop based on offset
+            start_x = int((zoomed_width - frame_width) // 2 - offset_x)
+            end_x = start_x + frame_width
+            
+            # Final boundary check
+            if start_x < 0:
+                start_x = 0
+                end_x = frame_width
+            elif end_x > zoomed_width:
+                end_x = zoomed_width
+                start_x = zoomed_width - frame_width
+            
+            # Crop and return the frame
+            return zoomed_frame[start_y:end_y, start_x:end_x]
             
         except Exception as e:
             logger.warning(f"Frame processing error: {e}")
