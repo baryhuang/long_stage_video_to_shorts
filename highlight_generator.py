@@ -652,9 +652,9 @@ def create_layout_preview(
     service_font = ImageFont.truetype(font_path, 40)
     logger.info("Using Noto Sans TC font with sizes: title=80px, church=50px, service=40px")
     
-    # Define text areas
+    # Define text areas with increased space for logo
     title_margin = 40
-    church_name_height = 100
+    church_name_height = 130  # Increased from 100 to 200 for larger logo
     main_title_height = 150
     service_info_height = 80
     
@@ -675,7 +675,7 @@ def create_layout_preview(
     logger.info(f"- Main title: {main_title_y}px")
     logger.info(f"- Service info: {service_info_y}px")
     
-    # Add logo for church name
+    # Add logo for church name with increased size
     if logo_path and os.path.exists(logo_path):
         try:
             logo = Image.open(logo_path)
@@ -683,8 +683,8 @@ def create_layout_preview(
             logo_height = church_name_height
             logo_width = int(logo.width * (logo_height / logo.height))
             
-            # If logo width exceeds available width, scale down based on width
-            max_logo_width = output_width - 2*title_margin
+            # Allow logo to be wider, up to 90% of output width
+            max_logo_width = int(output_width * 0.9)  # Increased from fixed margin to 90% of width
             if logo_width > max_logo_width:
                 logo_width = max_logo_width
                 logo_height = int(logo.height * (logo_width / logo.width))
@@ -902,7 +902,7 @@ def create_highlight_video(
     # Position the video in the center vertically with more space for the square
     # Calculate positions to center the 1:1 video with proper margins
     title_margin = 40
-    church_name_height = 100
+    church_name_height = 200  # Increased from 100 to 200 for larger logo
     main_title_height = 150
     service_info_height = 80
     
@@ -923,18 +923,18 @@ def create_highlight_video(
     main_title_y = title_margin + church_name_height + main_title_height//2
     service_info_y = title_margin + church_name_height + main_title_height + service_info_height//2
     
-    # Add logo or church name
+    # Add logo or church name with increased size
     if logo_path and os.path.exists(logo_path):
         try:
             # Create logo clip
             logo_clip = ImageClip(logo_path)
             
-            # Calculate logo size
+            # Calculate logo size with increased height
             logo_height = church_name_height
             logo_width = int(logo_clip.size[0] * (logo_height / logo_clip.size[1]))
             
-            # If logo width exceeds available width, scale down
-            max_logo_width = output_width - 2*title_margin
+            # Allow logo to be wider, up to 90% of output width
+            max_logo_width = int(output_width * 0.9)  # Increased from fixed margin to 90% of width
             if logo_width > max_logo_width:
                 logo_width = max_logo_width
                 logo_height = int(logo_clip.size[1] * (logo_width / logo_clip.size[0]))
