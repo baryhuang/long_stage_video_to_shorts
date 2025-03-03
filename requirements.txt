@@ -1,0 +1,14 @@
+opencv-python==4.8.1.78
+moviepy==1.0.3
+numpy==1.26.3
+assemblyai==0.17.0
+anthropic==0.18.0
+requests==2.31.0
+python-dotenv==1.0.0
+pydantic==2.5.3
+tqdm==4.66.1
+ffmpeg-python==0.2.0
+pillow==10.2.0
+langdetect==1.0.9
+zhconv==1.4.3
+jieba>=0.42.1 
