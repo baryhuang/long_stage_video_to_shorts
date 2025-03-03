@@ -11,4 +11,5 @@ ffmpeg-python==0.2.0
 pillow==10.2.0
 langdetect==1.0.9
 zhconv==1.4.3
-jieba>=0.42.1 
+jieba>=0.42.1
+mediapipe==0.10.9 

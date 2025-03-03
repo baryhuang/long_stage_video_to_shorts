@@ -20,6 +20,7 @@ import numpy as np
 from dotenv import load_dotenv
 import assemblyai as aai
 from anthropic import Anthropic
+import mediapipe as mp  # Add MediaPipe import
 from moviepy.editor import (
     VideoFileClip, TextClip, CompositeVideoClip, 
     ColorClip, ImageClip, concatenate_videoclips, VideoClip
@@ -853,9 +854,13 @@ def create_highlight_video(
     font_manager = FontManager()
     font_path = font_manager.get_font_path()
     
-    # Load video clip
+    # Load video clip and apply zoom and tracking
     video = VideoFileClip(input_path).subclip(highlight.start, highlight.end)
     logger.info(f"Original video dimensions: {video.size[0]}x{video.size[1]} (width x height)")
+    
+    # Apply zoom and tracking
+    logger.info("Applying 200% zoom and horizontal person tracking...")
+    processed_clip = process_video_with_zoom_and_tracking(video, zoom_factor=2.0)
     
     # Calculate dimensions for 9:16 portrait format
     output_width = 1080
@@ -863,13 +868,13 @@ def create_highlight_video(
     logger.info(f"Output dimensions (9:16): {output_width}x{output_height} (width x height)")
     
     # Keep original video aspect ratio but scale to fit width
-    orig_height, orig_width = video.size[1], video.size[0]
+    orig_height, orig_width = processed_clip.size[1], processed_clip.size[0]
     scale_factor = output_width / orig_width
     scaled_height = int(orig_height * scale_factor)
     logger.info(f"Scaled video dimensions: {output_width}x{scaled_height} (width x height)")
     
     # Resize video while maintaining aspect ratio
-    processed_clip = video.resize(width=output_width, height=scaled_height)
+    processed_clip = processed_clip.resize(width=output_width, height=scaled_height)
     
     # Create a black background for the 9:16 format
     black_bg = ColorClip(size=(output_width, output_height), color=(0, 0, 0))
@@ -1239,6 +1244,154 @@ def load_state(video_path: str, state_name: str) -> Optional[Any]:
         except Exception as e:
             logger.warning(f"Failed to load {state_name} state: {e}")
     return None
+
+def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float = 2.0) -> VideoFileClip:
+    """
+    Process video with static zoom and horizontal person tracking.
+    
+    Args:
+        clip: Input VideoFileClip
+        zoom_factor: Static zoom factor (default: 2.0 for 200% zoom)
+    
+    Returns:
+        Processed VideoFileClip with zoom and tracking
+    """
+    # Initialize MediaPipe Pose with global variable to prevent recreation
+    global mp_pose_instance
+    if 'mp_pose_instance' not in globals():
+        mp_pose = mp.solutions.pose
+        mp_pose_instance = mp_pose.Pose(
+            static_image_mode=False,
+            model_complexity=1,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
+        )
+    
+    # Store previous positions for smooth tracking
+    prev_center_x = None
+    prev_offset_x = None
+    smoothing_factor = 0.1  # Reduced from 0.3 to 0.1 for slower movement
+    max_speed = 5  # Maximum pixels per frame the camera can move
+    
+    def process_frame(frame):
+        nonlocal prev_center_x, prev_offset_x
+        
+        # Get frame dimensions
+        frame_height, frame_width = frame.shape[:2]
+        
+        try:
+            # Convert frame to RGB for MediaPipe
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            
+            # Process the frame with MediaPipe
+            results = mp_pose_instance.process(frame_rgb)
+            
+            # Calculate zoomed dimensions
+            zoomed_width = int(frame_width * zoom_factor)
+            zoomed_height = int(frame_height * zoom_factor)
+            
+            # Create zoomed frame
+            zoomed_frame = cv2.resize(frame, (zoomed_width, zoomed_height))
+            
+            if results and results.pose_landmarks:
+                # Calculate the center of the person (using shoulders as reference)
+                left_shoulder = results.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.LEFT_SHOULDER]
+                right_shoulder = results.pose_landmarks.landmark[mp.solutions.pose.PoseLandmark.RIGHT_SHOULDER]
+                current_center_x = (left_shoulder.x + right_shoulder.x) / 2 * frame_width
+                
+                # Apply double smoothing - first to the center position
+                if prev_center_x is not None:
+                    # Limit the maximum change in position
+                    max_center_change = max_speed
+                    center_change = current_center_x - prev_center_x
+                    limited_change = np.clip(center_change, -max_center_change, max_center_change)
+                    person_center_x = prev_center_x + limited_change
+                    
+                    # Apply smoothing after limiting speed
+                    person_center_x = prev_center_x + smoothing_factor * (person_center_x - prev_center_x)
+                else:
+                    person_center_x = current_center_x
+                
+                # Update previous center
+                prev_center_x = person_center_x
+                
+                # Calculate horizontal offset to keep person centered
+                max_offset_x = zoomed_width - frame_width
+                target_offset_x = frame_width/2 - person_center_x
+                
+                # Apply second smoothing to the camera movement
+                if prev_offset_x is not None:
+                    # Limit the maximum change in offset
+                    max_offset_change = max_speed
+                    offset_change = target_offset_x - prev_offset_x
+                    limited_offset_change = np.clip(offset_change, -max_offset_change, max_offset_change)
+                    offset_x = prev_offset_x + limited_offset_change
+                    
+                    # Apply smoothing after limiting speed
+                    offset_x = prev_offset_x + smoothing_factor * (offset_x - prev_offset_x)
+                else:
+                    offset_x = target_offset_x
+                
+                # Ensure offset stays within bounds
+                offset_x = np.clip(offset_x, -max_offset_x/2, max_offset_x/2)
+                
+                # Update previous offset
+                prev_offset_x = offset_x
+                
+                # Calculate vertical center crop (static, no vertical tracking)
+                start_y = (zoomed_height - frame_height) // 2
+                end_y = start_y + frame_height
+                
+                # Calculate horizontal crop based on person position
+                start_x = int((zoomed_width - frame_width) // 2 - offset_x)
+                end_x = start_x + frame_width
+                
+                # Ensure crop coordinates are within bounds
+                start_x = max(0, min(start_x, zoomed_width - frame_width))
+                end_x = min(zoomed_width, start_x + frame_width)
+            else:
+                # If no person detected or processing failed, use previous positions if available
+                if prev_offset_x is not None:
+                    # Keep the previous offset but slowly move towards center
+                    target_offset_x = 0
+                    max_offset_change = max_speed / 2  # Even slower return to center
+                    offset_change = target_offset_x - prev_offset_x
+                    limited_offset_change = np.clip(offset_change, -max_offset_change, max_offset_change)
+                    offset_x = prev_offset_x + limited_offset_change
+                    
+                    start_y = (zoomed_height - frame_height) // 2
+                    end_y = start_y + frame_height
+                    
+                    start_x = int((zoomed_width - frame_width) // 2 - offset_x)
+                    end_x = start_x + frame_width
+                    
+                    # Update previous offset
+                    prev_offset_x = offset_x
+                    
+                    # Ensure crop coordinates are within bounds
+                    start_x = max(0, min(start_x, zoomed_width - frame_width))
+                    end_x = min(zoomed_width, start_x + frame_width)
+                else:
+                    # If no previous offset, return centered crop
+                    start_y = (zoomed_height - frame_height) // 2
+                    end_y = start_y + frame_height
+                    start_x = (zoomed_width - frame_width) // 2
+                    end_x = start_x + frame_width
+            
+            # Crop the zoomed frame
+            processed_frame = zoomed_frame[start_y:end_y, start_x:end_x]
+            return processed_frame
+            
+        except Exception as e:
+            logger.warning(f"Frame processing error: {e}")
+            # Return centered crop of zoomed frame as fallback
+            start_y = (zoomed_height - frame_height) // 2
+            start_x = (zoomed_width - frame_width) // 2
+            return zoomed_frame[start_y:start_y + frame_height, start_x:start_x + frame_width]
+    
+    # Process the clip
+    processed_clip = clip.fl_image(process_frame)
+    return processed_clip
 
 def main():
     """Main function to process video and create highlight clips"""
