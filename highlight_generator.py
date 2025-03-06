@@ -655,7 +655,7 @@ def create_layout_preview(
     # Define text areas with increased space for logo
     title_margin = 40
     church_name_height = 130  # Increased from 100 to 200 for larger logo
-    main_title_height = 150
+    main_title_height = 200  # Increased from 150 to 200 for longer titles
     service_info_height = 80
     
     # Debug text area dimensions
@@ -722,15 +722,72 @@ def create_layout_preview(
             anchor='mm'
         )
     
-    # Draw main title
+    # Draw main title with multi-line support
     logger.info(f"Drawing main title: '{main_title}' at y={main_title_y}")
-    draw.text(
-        (output_width//2, main_title_y),
-        main_title,
-        font=title_font,
-        fill='#00FF00',
-        anchor='mm'
-    )
+    
+    # Calculate text size and wrap if needed
+    title_font_size = 80
+    title_font = ImageFont.truetype(font_path, title_font_size)
+    
+    # Check if title fits within width
+    title_width = title_font.getbbox(main_title)[2] - title_font.getbbox(main_title)[0]
+    available_width = output_width - 2 * title_margin
+    
+    if title_width > available_width:
+        # Try to find a natural break point
+        break_points = []
+        for i, char in enumerate(main_title):
+            if char in '。，！？,.!? ':
+                break_points.append(i)
+        
+        if break_points and len(main_title) > 10:
+            # Find the best break point near the middle
+            middle_idx = len(main_title) // 2
+            best_break = min(break_points, key=lambda x: abs(x - middle_idx))
+            
+            # Split the title into two lines
+            line1 = main_title[:best_break+1]
+            line2 = main_title[best_break+1:]
+            
+            # Draw each line
+            line_spacing = 10
+            draw.text(
+                (output_width//2, main_title_y - title_font_size//2 - line_spacing//2),
+                line1,
+                font=title_font,
+                fill='#00FF00',
+                anchor='mm'
+            )
+            draw.text(
+                (output_width//2, main_title_y + title_font_size//2 + line_spacing//2),
+                line2,
+                font=title_font,
+                fill='#00FF00',
+                anchor='mm'
+            )
+        else:
+            # If no good break point, reduce font size
+            while title_width > available_width and title_font_size > 40:
+                title_font_size -= 5
+                title_font = ImageFont.truetype(font_path, title_font_size)
+                title_width = title_font.getbbox(main_title)[2] - title_font.getbbox(main_title)[0]
+            
+            draw.text(
+                (output_width//2, main_title_y),
+                main_title,
+                font=title_font,
+                fill='#00FF00',
+                anchor='mm'
+            )
+    else:
+        # Title fits, draw normally
+        draw.text(
+            (output_width//2, main_title_y),
+            main_title,
+            font=title_font,
+            fill='#00FF00',
+            anchor='mm'
+        )
     
     # Draw service info
     service_info = "主日崇拜: 每週日下午2点"
@@ -988,17 +1045,84 @@ def create_highlight_video(
         clips_to_combine.append(church_name_clip)
         logger.info("Added church name text clip")
     
-    # Add main title
-    main_title_clip = TextClip(
-        highlight.title,
-        fontsize=80,
-        color='#00FF00',
-        font=font_path,
-        size=(output_width - 2*title_margin, main_title_height)
-    ).set_position(('center', main_title_y))
-    main_title_clip = main_title_clip.set_duration(video.duration)
-    clips_to_combine.append(main_title_clip)
-    logger.info(f"Added main title clip: '{highlight.title}'")
+    # Add main title with multi-line support
+    title_text = highlight.title
+    title_fontsize = 80
+    
+    # Check if title needs to be split into multiple lines
+    title_width_estimate = len(title_text) * title_fontsize * 0.6  # Rough estimate
+    available_width = output_width - 2 * title_margin
+    
+    if title_width_estimate > available_width:
+        # Try to find a natural break point
+        break_points = []
+        for i, char in enumerate(title_text):
+            if char in '。，！？,.!? ':
+                break_points.append(i)
+        
+        if break_points and len(title_text) > 10:
+            # Find the best break point near the middle
+            middle_idx = len(title_text) // 2
+            best_break = min(break_points, key=lambda x: abs(x - middle_idx))
+            
+            # Split the title into two lines
+            line1 = title_text[:best_break+1]
+            line2 = title_text[best_break+1:]
+            
+            # Create two separate text clips
+            line1_clip = TextClip(
+                line1,
+                fontsize=title_fontsize,
+                color='#00FF00',
+                font=font_path,
+                size=(output_width - 2*title_margin, main_title_height//2)
+            ).set_position(('center', main_title_y - title_fontsize//2 - 5))
+            
+            line2_clip = TextClip(
+                line2,
+                fontsize=title_fontsize,
+                color='#00FF00',
+                font=font_path,
+                size=(output_width - 2*title_margin, main_title_height//2)
+            ).set_position(('center', main_title_y + title_fontsize//2 + 5))
+            
+            line1_clip = line1_clip.set_duration(video.duration)
+            line2_clip = line2_clip.set_duration(video.duration)
+            
+            clips_to_combine.append(line1_clip)
+            clips_to_combine.append(line2_clip)
+            
+            logger.info(f"Added multi-line title clips: '{line1}' and '{line2}'")
+        else:
+            # If no good break point, reduce font size
+            while title_width_estimate > available_width and title_fontsize > 40:
+                title_fontsize -= 5
+                title_width_estimate = len(title_text) * title_fontsize * 0.6
+            
+            main_title_clip = TextClip(
+                title_text,
+                fontsize=title_fontsize,
+                color='#00FF00',
+                font=font_path,
+                size=(output_width - 2*title_margin, main_title_height)
+            ).set_position(('center', main_title_y))
+            
+            main_title_clip = main_title_clip.set_duration(video.duration)
+            clips_to_combine.append(main_title_clip)
+            logger.info(f"Added main title clip with reduced font size ({title_fontsize}px): '{title_text}'")
+    else:
+        # Title fits on one line
+        main_title_clip = TextClip(
+            title_text,
+            fontsize=title_fontsize,
+            color='#00FF00',
+            font=font_path,
+            size=(output_width - 2*title_margin, main_title_height)
+        ).set_position(('center', main_title_y))
+        
+        main_title_clip = main_title_clip.set_duration(video.duration)
+        clips_to_combine.append(main_title_clip)
+        logger.info(f"Added main title clip: '{title_text}'")
     
     # Add service info
     service_info_clip = TextClip(
@@ -1292,6 +1416,8 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
     Process video with static zoom and horizontal person tracking.
     Centers the person in frame while respecting video boundaries.
     Uses responsive tracking without speed limits for immediate following.
+    When no person is detected for several consecutive frames, removes zoom and returns the original frame.
+    Provides smooth transitions between zoomed and unzoomed states.
     
     Args:
         clip: Input VideoFileClip
@@ -1316,6 +1442,17 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
     prev_center_x = None
     prev_offset_x = None
     smoothing_factor = 0.3  # Increased for more immediate response
+    
+    # Track consecutive frames with no person detected
+    no_person_counter = 0
+    max_no_person_frames = 15  # Number of consecutive frames before removing zoom
+    
+    # Track current zoom level for smooth transitions
+    current_zoom = zoom_factor
+    zoom_transition_speed = 0.1  # Speed of zoom transition
+    
+    # Track if we were previously in unzoomed state
+    was_unzoomed = False
     
     def get_person_center(landmarks, frame_width, frame_height):
         """Calculate the center point of the person using multiple body landmarks"""
@@ -1342,7 +1479,7 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
             return frame_width / 2
 
     def process_frame(frame):
-        nonlocal prev_center_x, prev_offset_x
+        nonlocal prev_center_x, prev_offset_x, no_person_counter, current_zoom, was_unzoomed
         
         # Get frame dimensions
         frame_height, frame_width = frame.shape[:2]
@@ -1354,17 +1491,34 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
             # Process the frame with MediaPipe
             results = mp_pose_instance.process(frame_rgb)
             
-            # Calculate zoomed dimensions
-            zoomed_width = int(frame_width * zoom_factor)
-            zoomed_height = int(frame_height * zoom_factor)
+            # Check if person is detected
+            person_detected = results and results.pose_landmarks and any(
+                landmark.visibility > 0.5 for landmark in results.pose_landmarks.landmark
+            )
             
-            # Create zoomed frame
-            zoomed_frame = cv2.resize(frame, (zoomed_width, zoomed_height))
-            
-            # Maximum possible offset (half of the extra width from zooming)
-            max_offset_x = (zoomed_width - frame_width) // 2
-            
-            if results and results.pose_landmarks:
+            if person_detected:
+                # Check if we're transitioning from unzoomed to zoomed
+                if was_unzoomed:
+                    logger.debug("Person detected again, transitioning back to zoomed state")
+                    was_unzoomed = False
+                
+                # Reset no person counter when a person is detected
+                no_person_counter = 0
+                
+                # Gradually transition to full zoom if not already there
+                if current_zoom < zoom_factor:
+                    current_zoom = min(zoom_factor, current_zoom + zoom_transition_speed)
+                
+                # Calculate zoomed dimensions
+                zoomed_width = int(frame_width * current_zoom)
+                zoomed_height = int(frame_height * current_zoom)
+                
+                # Create zoomed frame
+                zoomed_frame = cv2.resize(frame, (zoomed_width, zoomed_height))
+                
+                # Maximum possible offset (half of the extra width from zooming)
+                max_offset_x = (zoomed_width - frame_width) // 2
+                
                 # Calculate person center using multiple body points
                 current_center_x = get_person_center(results.pose_landmarks, frame_width, frame_height)
                 
@@ -1396,51 +1550,129 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
                 # Update previous offset
                 prev_offset_x = offset_x
                 
+                # Calculate crop coordinates
+                # Vertical position based on ratio (static)
+                extra_height = zoomed_height - frame_height
+                start_y = int(extra_height * vertical_position_ratio)
+                end_y = start_y + frame_height
+                
+                # Ensure vertical bounds
+                if start_y < 0:
+                    start_y = 0
+                    end_y = frame_height
+                elif end_y > zoomed_height:
+                    end_y = zoomed_height
+                    start_y = zoomed_height - frame_height
+                
+                # Horizontal crop based on offset
+                start_x = int((zoomed_width - frame_width) // 2 - offset_x)
+                end_x = start_x + frame_width
+                
+                # Final horizontal boundary check
+                if start_x < 0:
+                    start_x = 0
+                    end_x = frame_width
+                elif end_x > zoomed_width:
+                    end_x = zoomed_width
+                    start_x = zoomed_width - frame_width
+                
+                # Crop and return the frame
+                return zoomed_frame[start_y:end_y, start_x:end_x]
             else:
-                # If no person detected, gradually return to center
-                if prev_offset_x is not None:
+                # Increment no person counter
+                no_person_counter += 1
+                
+                if no_person_counter >= max_no_person_frames:
+                    # If no person detected for several consecutive frames, gradually transition to original frame
+                    if current_zoom > 1.0:
+                        # Gradually reduce zoom
+                        current_zoom = max(1.0, current_zoom - zoom_transition_speed)
+                        
+                        if current_zoom == 1.0:
+                            # We've reached unzoomed state
+                            if not was_unzoomed:
+                                logger.debug(f"No person detected for {no_person_counter} frames, fully unzoomed")
+                                was_unzoomed = True
+                            return frame
+                        
+                        # Calculate zoomed dimensions for transition
+                        zoomed_width = int(frame_width * current_zoom)
+                        zoomed_height = int(frame_height * current_zoom)
+                        
+                        # Create zoomed frame
+                        zoomed_frame = cv2.resize(frame, (zoomed_width, zoomed_height))
+                        
+                        # Center crop during transition
+                        extra_width = zoomed_width - frame_width
+                        extra_height = zoomed_height - frame_height
+                        start_x = extra_width // 2
+                        start_y = int(extra_height * vertical_position_ratio)
+                        
+                        # Ensure bounds
+                        if start_y < 0:
+                            start_y = 0
+                        if start_y + frame_height > zoomed_height:
+                            start_y = zoomed_height - frame_height
+                        
+                        return zoomed_frame[start_y:start_y + frame_height, start_x:start_x + frame_width]
+                    else:
+                        # Already at original zoom level
+                        prev_center_x = None
+                        prev_offset_x = None
+                        was_unzoomed = True
+                        return frame
+                elif prev_offset_x is not None:
+                    # For a few frames, gradually transition back to center
+                    # Calculate zoomed dimensions
+                    zoomed_width = int(frame_width * current_zoom)
+                    zoomed_height = int(frame_height * current_zoom)
+                    
+                    # Create zoomed frame
+                    zoomed_frame = cv2.resize(frame, (zoomed_width, zoomed_height))
+                    
+                    # Maximum possible offset
+                    max_offset_x = (zoomed_width - frame_width) // 2
+                    
                     # Quick return to center when no person detected
                     target_offset_x = 0
                     offset_x = prev_offset_x + smoothing_factor * 2 * (target_offset_x - prev_offset_x)  # Faster return
                     prev_offset_x = offset_x
+                    
+                    # Calculate crop coordinates
+                    extra_height = zoomed_height - frame_height
+                    start_y = int(extra_height * vertical_position_ratio)
+                    end_y = start_y + frame_height
+                    
+                    # Ensure vertical bounds
+                    if start_y < 0:
+                        start_y = 0
+                        end_y = frame_height
+                    elif end_y > zoomed_height:
+                        end_y = zoomed_height
+                        start_y = zoomed_height - frame_height
+                    
+                    # Horizontal crop based on offset
+                    start_x = int((zoomed_width - frame_width) // 2 - offset_x)
+                    end_x = start_x + frame_width
+                    
+                    # Final horizontal boundary check
+                    if start_x < 0:
+                        start_x = 0
+                        end_x = frame_width
+                    elif end_x > zoomed_width:
+                        end_x = zoomed_width
+                        start_x = zoomed_width - frame_width
+                    
+                    return zoomed_frame[start_y:end_y, start_x:end_x]
                 else:
-                    offset_x = 0
-            
-            # Calculate crop coordinates
-            # Vertical position based on ratio (static)
-            extra_height = zoomed_height - frame_height
-            start_y = int(extra_height * vertical_position_ratio)
-            end_y = start_y + frame_height
-            
-            # Ensure vertical bounds
-            if start_y < 0:
-                start_y = 0
-                end_y = frame_height
-            elif end_y > zoomed_height:
-                end_y = zoomed_height
-                start_y = zoomed_height - frame_height
-            
-            # Horizontal crop based on offset
-            start_x = int((zoomed_width - frame_width) // 2 - offset_x)
-            end_x = start_x + frame_width
-            
-            # Final horizontal boundary check
-            if start_x < 0:
-                start_x = 0
-                end_x = frame_width
-            elif end_x > zoomed_width:
-                end_x = zoomed_width
-                start_x = zoomed_width - frame_width
-            
-            # Crop and return the frame
-            return zoomed_frame[start_y:end_y, start_x:end_x]
+                    # If no previous offset, return original frame
+                    was_unzoomed = True
+                    return frame
             
         except Exception as e:
             logger.warning(f"Frame processing error: {e}")
-            # Return centered crop of zoomed frame as fallback
-            start_y = int(extra_height * vertical_position_ratio)
-            start_x = (zoomed_width - frame_width) // 2
-            return zoomed_frame[start_y:start_y + frame_height, start_x:start_x + frame_width]
+            # Return original frame as fallback in case of error
+            return frame
     
     # Process the clip
     processed_clip = clip.fl_image(process_frame)
@@ -1511,8 +1743,9 @@ def create_zoom_preview(
     # Create a new image with both frames side by side
     margin = 20  # Margin between images and for text
     text_height = 40  # Height for text
+    info_height = 80  # Height for additional information text
     preview_width = new_width_orig + new_width_proc + 3 * margin
-    preview_height = max(new_height_orig, new_height_proc) + 2 * margin + text_height
+    preview_height = max(new_height_orig, new_height_proc) + 2 * margin + text_height + info_height
     
     preview = Image.new('RGB', (preview_width, preview_height), 'black')
     
@@ -1528,12 +1761,23 @@ def create_zoom_preview(
     # Add text labels
     draw = ImageDraw.Draw(preview)
     font = ImageFont.truetype(font_path, 20)  # Use our custom font
+    small_font = ImageFont.truetype(font_path, 16)  # Smaller font for additional info
     
     # Add labels
     draw.text((margin, margin), "原始影像", fill='white', font=font)  # "Original Frame" in Traditional Chinese
     draw.text((margin * 2 + new_width_orig, margin), 
              f"處理後影像 (縮放: {zoom_factor}x, 垂直位置: {vertical_position_ratio:.2f})",  # "Processed Frame" in Traditional Chinese
              fill='white', font=font)
+    
+    # Add information about no person detection behavior
+    info_y = margin + text_height + max(new_height_orig, new_height_proc) + margin
+    info_text = "注意: 當畫面中沒有檢測到人時，將自動取消縮放效果，恢復原始畫面。"  # Note about no person detection in Traditional Chinese
+    draw.text((preview_width // 2, info_y), info_text, fill='#FFFF00', font=font, anchor='mm')
+    
+    # Add additional explanation
+    info_y += 30
+    info_text2 = "系統會在人物消失後約半秒內平滑過渡到原始畫面，人物重新出現時會恢復縮放效果。"  # Explanation in Traditional Chinese
+    draw.text((preview_width // 2, info_y), info_text2, fill='#FFFF00', font=small_font, anchor='mm')
     
     # Save preview
     preview.save(output_preview_path, 'JPEG', quality=95)
@@ -1545,6 +1789,8 @@ def create_zoom_preview(
     print(f"預覽圖片已保存至: {output_preview_path}")  # "Preview image has been saved to" in Traditional Chinese
     print(f"縮放倍率: {zoom_factor}x")  # "Zoom factor" in Traditional Chinese
     print(f"垂直位置比例: {vertical_position_ratio:.2f}")  # "Vertical position ratio" in Traditional Chinese
+    print("\n注意: 當畫面中沒有檢測到人時，將自動取消縮放效果，恢復原始畫面。")  # Note about no person detection
+    print("系統會在人物消失後約半秒內平滑過渡到原始畫面，人物重新出現時會恢復縮放效果。")  # Explanation
     print("\n請檢查預覽圖片，確認是否要使用這些設置繼續。")  # "Please check the preview image..." in Traditional Chinese
     
     while True:
