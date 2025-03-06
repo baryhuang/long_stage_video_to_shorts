@@ -812,11 +812,12 @@ def create_layout_preview(
 def create_highlight_video(
     input_path: str, 
     highlight: HighlightClip, 
-    segments: List[TranscriptionSegment],
+    segments: Optional[List[TranscriptionSegment]],  # Make segments optional
     output_path: str,
     main_title: str,  # This will be ignored as we'll use highlight.title
     logo_path: Optional[str] = None,
-    add_subtitles: bool = False
+    add_subtitles: bool = False,
+    vertical_position_ratio: float = 0.67  # Add new parameter with default 2/3
 ):
     """
     Create highlight video in 9:16 format with titles and subtitles, styled like a church service video
@@ -827,26 +828,40 @@ def create_highlight_video(
     Args:
         input_path: Path to input video
         highlight: HighlightClip object with timing information
-        segments: List of transcription segments
+        segments: List of transcription segments (optional, None for full video mode)
         output_path: Path to output video
         main_title: Ignored as we use highlight.title instead
         logo_path: Path to logo image file (optional)
         add_subtitles: Whether to add subtitles to the video (default: False)
+        vertical_position_ratio: Ratio for vertical positioning (default: 0.67 for 2/3 from top)
     """
-    # Create preview first
-    preview_path = str(Path(output_path).with_suffix('.preview.jpg'))
+    # Create zoom preview first
+    zoom_preview_path = str(Path(output_path).with_suffix('.zoom_preview.jpg'))
     preview_timestamp = highlight.start + (highlight.end - highlight.start) / 2  # Use middle frame for preview
     
+    # Show zoom preview and get confirmation
+    if not create_zoom_preview(
+        input_path=input_path,
+        timestamp=preview_timestamp,
+        zoom_factor=2.0,  # Fixed zoom factor
+        vertical_position_ratio=vertical_position_ratio,
+        output_preview_path=zoom_preview_path
+    ):
+        logger.info("Video creation cancelled by user after zoom preview")
+        return
+    
+    # Create layout preview
+    layout_preview_path = str(Path(output_path).with_suffix('.layout_preview.jpg'))
     if not create_layout_preview(
         input_path=input_path,
         timestamp=preview_timestamp,
         main_title=highlight.title,
-        output_preview_path=preview_path,
+        output_preview_path=layout_preview_path,
         logo_path=logo_path,
-        segments=segments,
+        segments=segments,  # This can be None now
         highlight=highlight
     ):
-        logger.info("Video creation cancelled by user")
+        logger.info("Video creation cancelled by user after layout preview")
         return
 
     logger.info(f"Creating highlight video from {highlight.start:.2f}s to {highlight.end:.2f}s")
@@ -859,9 +874,9 @@ def create_highlight_video(
     video = VideoFileClip(input_path).subclip(highlight.start, highlight.end)
     logger.info(f"Original video dimensions: {video.size[0]}x{video.size[1]} (width x height)")
     
-    # Apply zoom and tracking
-    logger.info("Applying 200% zoom and horizontal person tracking...")
-    processed_clip = process_video_with_zoom_and_tracking(video, zoom_factor=2.0)
+    # Apply zoom and tracking with vertical position ratio
+    logger.info(f"Applying 200% zoom and horizontal person tracking with vertical position ratio {vertical_position_ratio}...")
+    processed_clip = process_video_with_zoom_and_tracking(video, zoom_factor=2.0, vertical_position_ratio=vertical_position_ratio)
     
     # Calculate dimensions for 9:16 portrait format
     output_width = 1080
@@ -997,8 +1012,8 @@ def create_highlight_video(
     clips_to_combine.append(service_info_clip)
     logger.info("Added service info clip")
     
-    # Add subtitles only if requested
-    if add_subtitles:
+    # Add subtitles only if requested and segments are available
+    if add_subtitles and segments:
         # Filter segments that overlap with the highlight clip
         highlight_segments = [
             seg for seg in segments 
@@ -1223,7 +1238,10 @@ def create_highlight_video(
             
             clips_to_combine.append(subtitle)
     else:
-        logger.info("Skipping subtitles as they were not requested")
+        if add_subtitles and not segments:
+            logger.info("Skipping subtitles as no segments are available (full video mode)")
+        else:
+            logger.info("Skipping subtitles as they were not requested")
     
     # Combine all clips
     logger.info(f"Combining {len(clips_to_combine)} clips")
@@ -1269,7 +1287,7 @@ def load_state(video_path: str, state_name: str) -> Optional[Any]:
             logger.warning(f"Failed to load {state_name} state: {e}")
     return None
 
-def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float = 2.0) -> VideoFileClip:
+def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float = 2.0, vertical_position_ratio: float = 0.5) -> VideoFileClip:
     """
     Process video with static zoom and horizontal person tracking.
     Centers the person in frame while respecting video boundaries.
@@ -1278,6 +1296,7 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
     Args:
         clip: Input VideoFileClip
         zoom_factor: Static zoom factor (default: 2.0 for 200% zoom)
+        vertical_position_ratio: Ratio for vertical positioning (default: 0.5 for center, 0.67 for 2/3 from top)
     
     Returns:
         Processed VideoFileClip with zoom and tracking
@@ -1388,15 +1407,24 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
                     offset_x = 0
             
             # Calculate crop coordinates
-            # Vertical center crop (static)
-            start_y = (zoomed_height - frame_height) // 2
+            # Vertical position based on ratio (static)
+            extra_height = zoomed_height - frame_height
+            start_y = int(extra_height * vertical_position_ratio)
             end_y = start_y + frame_height
+            
+            # Ensure vertical bounds
+            if start_y < 0:
+                start_y = 0
+                end_y = frame_height
+            elif end_y > zoomed_height:
+                end_y = zoomed_height
+                start_y = zoomed_height - frame_height
             
             # Horizontal crop based on offset
             start_x = int((zoomed_width - frame_width) // 2 - offset_x)
             end_x = start_x + frame_width
             
-            # Final boundary check
+            # Final horizontal boundary check
             if start_x < 0:
                 start_x = 0
                 end_x = frame_width
@@ -1410,13 +1438,150 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
         except Exception as e:
             logger.warning(f"Frame processing error: {e}")
             # Return centered crop of zoomed frame as fallback
-            start_y = (zoomed_height - frame_height) // 2
+            start_y = int(extra_height * vertical_position_ratio)
             start_x = (zoomed_width - frame_width) // 2
             return zoomed_frame[start_y:start_y + frame_height, start_x:start_x + frame_width]
     
     # Process the clip
     processed_clip = clip.fl_image(process_frame)
     return processed_clip
+
+def create_zoom_preview(
+    input_path: str,
+    timestamp: float,
+    zoom_factor: float,
+    vertical_position_ratio: float,
+    output_preview_path: str
+) -> bool:
+    """
+    Create a preview image showing the zoom and vertical crop settings.
+    Shows both the original frame and the processed frame side by side.
+    
+    Args:
+        input_path: Path to input video
+        timestamp: Timestamp to use for preview frame
+        zoom_factor: Zoom factor to apply
+        vertical_position_ratio: Ratio for vertical positioning
+        output_preview_path: Path to save the preview image
+    
+    Returns:
+        bool: True if user confirms the settings, False otherwise
+    """
+    logger.info(f"Creating zoom preview using frame at {timestamp:.2f}s")
+    
+    # Initialize font manager
+    font_manager = FontManager()
+    font_path = font_manager.get_font_path()
+    
+    # Load video and extract frame
+    video = VideoFileClip(input_path)
+    frame = video.get_frame(timestamp)
+    video.close()
+    
+    # Create a temporary clip for the single frame
+    frame_clip = VideoFileClip(input_path).subclip(timestamp, timestamp + 0.1)
+    
+    # Process the frame with zoom and tracking
+    processed_clip = process_video_with_zoom_and_tracking(
+        frame_clip,
+        zoom_factor=zoom_factor,
+        vertical_position_ratio=vertical_position_ratio
+    )
+    processed_frame = processed_clip.get_frame(0)
+    processed_clip.close()
+    frame_clip.close()
+    
+    # Convert frames to PIL Images
+    original_image = Image.fromarray(frame)
+    processed_image = Image.fromarray(processed_frame)
+    
+    # Calculate dimensions for side-by-side comparison
+    max_height = 800  # Maximum height for preview
+    scale_factor = max_height / max(original_image.height, processed_image.height)
+    
+    # Resize images while maintaining aspect ratio
+    new_width_orig = int(original_image.width * scale_factor)
+    new_height_orig = int(original_image.height * scale_factor)
+    new_width_proc = int(processed_image.width * scale_factor)
+    new_height_proc = int(processed_image.height * scale_factor)
+    
+    original_image = original_image.resize((new_width_orig, new_height_orig), Image.Resampling.LANCZOS)
+    processed_image = processed_image.resize((new_width_proc, new_height_proc), Image.Resampling.LANCZOS)
+    
+    # Create a new image with both frames side by side
+    margin = 20  # Margin between images and for text
+    text_height = 40  # Height for text
+    preview_width = new_width_orig + new_width_proc + 3 * margin
+    preview_height = max(new_height_orig, new_height_proc) + 2 * margin + text_height
+    
+    preview = Image.new('RGB', (preview_width, preview_height), 'black')
+    
+    # Paste original frame on the left
+    x_offset = margin
+    y_offset = margin + text_height
+    preview.paste(original_image, (x_offset, y_offset))
+    
+    # Paste processed frame on the right
+    x_offset = margin * 2 + new_width_orig
+    preview.paste(processed_image, (x_offset, y_offset))
+    
+    # Add text labels
+    draw = ImageDraw.Draw(preview)
+    font = ImageFont.truetype(font_path, 20)  # Use our custom font
+    
+    # Add labels
+    draw.text((margin, margin), "原始影像", fill='white', font=font)  # "Original Frame" in Traditional Chinese
+    draw.text((margin * 2 + new_width_orig, margin), 
+             f"處理後影像 (縮放: {zoom_factor}x, 垂直位置: {vertical_position_ratio:.2f})",  # "Processed Frame" in Traditional Chinese
+             fill='white', font=font)
+    
+    # Save preview
+    preview.save(output_preview_path, 'JPEG', quality=95)
+    logger.info(f"Saved zoom preview to {output_preview_path}")
+    
+    # Show preview and get confirmation
+    print("\n縮放和裁剪預覽:")  # "Zoom and Crop Preview" in Traditional Chinese
+    print("-" * 50)
+    print(f"預覽圖片已保存至: {output_preview_path}")  # "Preview image has been saved to" in Traditional Chinese
+    print(f"縮放倍率: {zoom_factor}x")  # "Zoom factor" in Traditional Chinese
+    print(f"垂直位置比例: {vertical_position_ratio:.2f}")  # "Vertical position ratio" in Traditional Chinese
+    print("\n請檢查預覽圖片，確認是否要使用這些設置繼續。")  # "Please check the preview image..." in Traditional Chinese
+    
+    while True:
+        choice = input("\n您想要:\n1. 使用這些設置繼續\n2. 退出\n請輸入您的選擇 (1/2): ").strip()  # Menu options in Traditional Chinese
+        if choice in ['1', '2']:
+            break
+        print("無效的選擇。請輸入 1 或 2。")  # "Invalid choice" in Traditional Chinese
+    
+    return choice == '1'
+
+def create_full_video_segment(video_path: str) -> Dict[str, Any]:
+    """
+    Create a segment that covers the entire video.
+    
+    Args:
+        video_path: Path to the video file
+    
+    Returns:
+        Dictionary containing segment information for the full video
+    """
+    # Get video duration
+    video = VideoFileClip(video_path)
+    duration = video.duration
+    video.close()
+    
+    # Create a segment covering the entire video
+    return {
+        "segments": [
+            {
+                "start_time": 0.0,
+                "end_time": duration,
+                "content": "完整影片",  # "Full video" in Traditional Chinese
+                "reason": "使用完整影片進行處理"  # "Processing the entire video" in Traditional Chinese
+            }
+        ],
+        "theme": "完整影片處理"  # "Full video processing" in Traditional Chinese
+    }
 
 def main():
     """Main function to process video and create highlight clips"""
@@ -1432,6 +1597,11 @@ def main():
                       help='Resume from a specific stage using saved state')
     parser.add_argument('--add-subtitles', action='store_true',
                       help='Add subtitles to the video (default: False)')
+    parser.add_argument('--vertical-position', '-v', type=float, default=0.67,
+                      help='Vertical position ratio for the main subject (default: 0.67 for 2/3 from top)')
+    parser.add_argument('--full-video', '-f', action='store_true',
+                      help='Process the entire video without selecting segments (default: False)')
+    parser.add_argument('--manual-title', '-m', help='Manually specify the video title')
     
     args = parser.parse_args()
     
@@ -1461,39 +1631,75 @@ def main():
         highlight = None
         in_title_generation = False
 
-        # Step 1: Load or generate transcription
-        if args.resume_from in ['transcribe', 'segments', 'titles']:
-            # Load transcription state
-            transcript_data = load_state(args.input_video, 'transcript')
-            if transcript_data:
-                segments = [
-                    TranscriptionSegment(
-                        text=seg['text'],
-                        start=seg['start'],
-                        end=seg['end'],
-                        words=seg.get('words', [])
-                    )
-                    for seg in transcript_data
-                ]
-                logger.info(f"Loaded transcription with {len(segments)} segments")
+        # Step 1: Load or generate transcription if needed
+        # We need transcription in two cases:
+        # 1. Not using full video mode
+        # 2. Using full video mode but subtitles are requested
+        need_transcription = not args.full_video or (args.full_video and args.add_subtitles)
+        
+        if need_transcription:
+            if args.resume_from in ['transcribe', 'segments', 'titles']:
+                # Load transcription state
+                transcript_data = load_state(args.input_video, 'transcript')
+                if transcript_data:
+                    segments = [
+                        TranscriptionSegment(
+                            text=seg['text'],
+                            start=seg['start'],
+                            end=seg['end'],
+                            words=seg.get('words', [])
+                        )
+                        for seg in transcript_data
+                    ]
+                    logger.info(f"Loaded transcription with {len(segments)} segments")
+                else:
+                    logger.error("No transcription state found to resume from")
+                    if args.full_video:
+                        # For full video mode, we can continue without transcription if not resuming
+                        logger.info("Continuing without transcription in full video mode")
+                        segments = None
+                    else:
+                        return
             else:
-                logger.error("No transcription state found to resume from")
-                return
-        else:
-            segments = transcribe_video(args.input_video)
-            # Save transcription state
-            save_state(args.input_video, 'transcript', [
-                {
-                    'text': seg.text,
-                    'start': seg.start,
-                    'end': seg.end,
-                    'words': seg.words
-                }
-                for seg in segments
-            ])
+                logger.info("Generating transcription...")
+                segments = transcribe_video(args.input_video)
+                # Save transcription state
+                save_state(args.input_video, 'transcript', [
+                    {
+                        'text': seg.text,
+                        'start': seg.start,
+                        'end': seg.end,
+                        'words': seg.words
+                    }
+                    for seg in segments
+                ])
 
-        # Step 2: Load or identify segments
-        if args.resume_from in ['segments', 'titles']:
+        # If manual title is provided, create highlight object directly
+        if args.manual_title:
+            if args.full_video:
+                # Create a segment for the full video
+                segments_data = create_full_video_segment(args.input_video)
+                # Create highlight object with manual title
+                highlight = HighlightClip(
+                    start=float(segments_data['segments'][0]['start_time']),
+                    end=float(segments_data['segments'][0]['end_time']),
+                    score=100.0,  # Give perfect score for manual titles
+                    title=args.manual_title
+                )
+                highlights = [highlight]
+                in_title_generation = True
+                logger.info(f"Using manual title: {args.manual_title}")
+            else:
+                logger.error("Manual title can only be used with --full-video option")
+                return
+
+        # Step 2: Load or identify segments (if not already done with manual title)
+        if args.full_video and not highlight:
+            # Create a segment for the full video
+            segments_data = create_full_video_segment(args.input_video)
+            logger.info("Using full video as a single segment")
+            in_title_generation = True  # Skip segment selection
+        elif not args.full_video and args.resume_from in ['segments', 'titles'] and not highlight:
             # Load segments state
             segments_data = load_state(args.input_video, 'segments')
             if not segments_data:
@@ -1501,8 +1707,8 @@ def main():
                 return
             logger.info("Loaded segments data from state")
 
-        # Step 3: Load titles if resuming from titles
-        if args.resume_from == 'titles':
+        # Step 3: Load titles if resuming from titles (if not already done with manual title)
+        if not highlight and args.resume_from == 'titles':
             # Load titles state
             titles_data = load_state(args.input_video, 'titles')
             if titles_data and titles_data.get('segments'):
@@ -1547,11 +1753,12 @@ def main():
                 print(f"Selection Reason: {seg['reason']}")
                 
                 # Show original transcripts for this time range
-                print("\nOriginal Transcripts:")
-                print("-" * 30)
-                for transcript_seg in segments:
-                    if (transcript_seg.start <= end_time and transcript_seg.end >= start_time):
-                        print(f"{transcript_seg.start:.2f}s - {transcript_seg.end:.2f}s: {transcript_seg.text}")
+                if segments:
+                    print("\nOriginal Transcripts:")
+                    print("-" * 30)
+                    for transcript_seg in segments:
+                        if (transcript_seg.start <= end_time and transcript_seg.end >= start_time):
+                            print(f"{transcript_seg.start:.2f}s - {transcript_seg.end:.2f}s: {transcript_seg.text}")
                 
                 print("\nVideo Theme:")
                 print("-" * 50)
@@ -1614,56 +1821,78 @@ def main():
                         logger.error("Failed to generate titles")
                         return
                 
-                print("\nGenerated Titles:")
-                print("-" * 50)
-                print(f"Segment Title: {highlight.title}")
-                print(f"Engagement Score: {highlight.score}/100")
-                
-                while True:
-                    title_choice = input("\nDo you want to:\n1. Continue with these titles\n2. Generate new titles\n3. Exit\nEnter your choice (1/2/3): ").strip()
-                    if title_choice in ['1', '2', '3']:
-                        break
-                    print("Invalid choice. Please enter 1, 2, or 3.")
-                
-                if title_choice == '1':
-                    # Create highlight video
-                    create_highlight_video(
-                        args.input_video,
-                        highlight,
-                        segments,
-                        args.output,
-                        highlight.title,  # Use highlight.title as the main title
-                        args.logo,
-                        args.add_subtitles  # Pass the subtitle flag
-                    )
+                if not args.manual_title:
+                    print("\n標題選項:")  # "Title Options" in Traditional Chinese
+                    print("-" * 50)
+                    print(f"生成的標題: {highlight.title}")  # "Generated title" in Traditional Chinese
+                    print(f"參與度評分: {highlight.score}/100")  # "Engagement score" in Traditional Chinese
                     
-                    logger.info(f"Successfully created highlight video: {args.output}")
-                    return
-                elif title_choice == '2':
-                    # Regenerate titles using the same segments data
-                    logger.info("Regenerating titles with existing segment data...")
-                    _, highlights = generate_titles(segments_data)
-                    if highlights:
-                        highlight = highlights[0]  # We now only have one highlight
-                        # Save titles state
-                        save_state(args.input_video, 'titles', {
-                            'segments': [
-                                {
-                                    'title': highlight.title,
-                                    'score': highlight.score
-                                }
-                            ]
-                        })
-                    else:
-                        logger.error("Failed to generate new titles")
+                    while True:
+                        title_choice = input("\n您想要:\n1. 使用這個標題\n2. 生成新標題\n3. 手動輸入標題\n4. 退出\n請輸入您的選擇 (1/2/3/4): ").strip()
+                        if title_choice in ['1', '2', '3', '4']:
+                            break
+                        print("無效的選擇。請輸入 1、2、3 或 4。")
+                    
+                    if title_choice == '1':
+                        pass  # Continue with current title
+                    elif title_choice == '2':
+                        # Regenerate titles using the same segments data
+                        logger.info("重新生成標題...")  # "Regenerating titles..." in Traditional Chinese
+                        _, highlights = generate_titles(segments_data)
+                        if highlights:
+                            highlight = highlights[0]
+                            # Save titles state
+                            save_state(args.input_video, 'titles', {
+                                'segments': [
+                                    {
+                                        'title': highlight.title,
+                                        'score': highlight.score
+                                    }
+                                ]
+                            })
+                        else:
+                            logger.error("無法生成新標題")  # "Failed to generate new titles" in Traditional Chinese
+                            return
+                        continue
+                    elif title_choice == '3':
+                        # Manual title input
+                        new_title = input("\n請輸入標題: ").strip()  # "Please enter title" in Traditional Chinese
+                        if new_title:
+                            highlight.title = new_title
+                            highlight.score = 100.0  # Perfect score for manual titles
+                            # Save titles state
+                            save_state(args.input_video, 'titles', {
+                                'segments': [
+                                    {
+                                        'title': highlight.title,
+                                        'score': highlight.score
+                                    }
+                                ]
+                            })
+                        else:
+                            print("標題不能為空，將使用生成的標題。")  # "Title cannot be empty..." in Traditional Chinese
+                        continue
+                    else:  # title_choice == '4'
+                        print("退出程序。")  # "Exiting program" in Traditional Chinese
                         return
-                    continue
-                else:  # title_choice == '3'
-                    print("Exiting program.")
-                    return
+                
+                # Create highlight video
+                create_highlight_video(
+                    args.input_video,
+                    highlight,
+                    segments,  # Always pass segments if available (for subtitles)
+                    args.output,
+                    highlight.title,  # Use highlight.title as the main title
+                    args.logo,
+                    args.add_subtitles,  # Pass the subtitle flag
+                    args.vertical_position  # Pass the vertical position ratio
+                )
+                
+                logger.info(f"成功創建精彩片段視頻: {args.output}")  # "Successfully created highlight video" in Traditional Chinese
+                return
     
     except Exception as e:
-        logger.error(f"Error processing video: {e}")
+        logger.error(f"處理視頻時出錯: {e}")  # "Error processing video" in Traditional Chinese
         raise
 
 if __name__ == "__main__":
