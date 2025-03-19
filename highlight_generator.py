@@ -1829,6 +1829,39 @@ def create_full_video_segment(video_path: str) -> Dict[str, Any]:
         "theme": "完整影片處理"  # "Full video processing" in Traditional Chinese
     }
 
+def create_text_transcript(video_path: str, segments: List[TranscriptionSegment]) -> str:
+    """
+    Create a plain text transcript file from segments.
+    
+    Args:
+        video_path: Path to the original video file
+        segments: List of transcription segments
+    
+    Returns:
+        Path to the created transcript file
+    """
+    video_path_obj = Path(video_path)
+    transcript_path = video_path_obj.with_suffix('.transcript.txt')
+    
+    # Sort segments by start time
+    sorted_segments = sorted(segments, key=lambda x: x.start)
+    
+    # Write transcript to file
+    with open(transcript_path, 'w', encoding='utf-8') as f:
+        f.write(f"Transcript for: {video_path_obj.name}\n")
+        f.write("=" * 50 + "\n\n")
+        
+        for i, seg in enumerate(sorted_segments, 1):
+            timestamp = f"[{int(seg.start//60):02d}:{int(seg.start%60):02d}.{int((seg.start%1)*10):01d} - {int(seg.end//60):02d}:{int(seg.end%60):02d}.{int((seg.end%1)*10):01d}]"
+            f.write(f"{timestamp} {seg.text}\n")
+            
+            # Add blank line every 5 segments for readability
+            if i % 5 == 0:
+                f.write("\n")
+    
+    logger.info(f"Created plain text transcript at: {transcript_path}")
+    return str(transcript_path)
+
 def main():
     """Main function to process video and create highlight clips"""
     parser = argparse.ArgumentParser(description='Generate highlight clips from long videos')
@@ -1848,6 +1881,10 @@ def main():
     parser.add_argument('--full-video', '-f', action='store_true',
                       help='Process the entire video without selecting segments (default: False)')
     parser.add_argument('--manual-title', '-m', help='Manually specify the video title')
+    parser.add_argument('--language-code', type=str, default='zh',
+                      help='Language code for transcription (default: zh for Chinese)')
+    parser.add_argument('--transcribe-only', action='store_true',
+                      help='Stop after transcription step and exit')
     
     args = parser.parse_args()
     
@@ -1898,6 +1935,15 @@ def main():
                         for seg in transcript_data
                     ]
                     logger.info(f"Loaded transcription with {len(segments)} segments")
+                    
+                    # If using transcribe_only mode, create text transcript file
+                    if args.transcribe_only:
+                        transcript_txt_path = Path(args.input_video).with_suffix('.transcript.txt')
+                        if not transcript_txt_path.exists():
+                            logger.info("Creating plain text transcript file from loaded state...")
+                            create_text_transcript(args.input_video, segments)
+                        logger.info("Transcription data loaded. Exiting as --transcribe-only flag was set.")
+                        return
                 else:
                     logger.error("No transcription state found to resume from")
                     if args.full_video:
@@ -1908,7 +1954,7 @@ def main():
                         return
             else:
                 logger.info("Generating transcription...")
-                segments = transcribe_video(args.input_video)
+                segments = transcribe_video(args.input_video, args.language_code)
                 # Save transcription state
                 save_state(args.input_video, 'transcript', [
                     {
@@ -1919,6 +1965,17 @@ def main():
                     }
                     for seg in segments
                 ])
+                
+                # If transcribe_only flag is set, exit after transcription
+                if args.transcribe_only:
+                    # Create plain text transcript file if it doesn't exist
+                    transcript_txt_path = Path(args.input_video).with_suffix('.transcript.txt')
+                    if not transcript_txt_path.exists():
+                        logger.info("Creating plain text transcript file...")
+                        create_text_transcript(args.input_video, segments)
+                    
+                    logger.info("Transcription completed. Exiting as --transcribe-only flag was set.")
+                    return
 
         # If manual title is provided, create highlight object directly
         if args.manual_title:
