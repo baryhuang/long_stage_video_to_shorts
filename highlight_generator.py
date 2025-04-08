@@ -21,10 +21,11 @@ from dotenv import load_dotenv
 import assemblyai as aai
 from anthropic import Anthropic
 import mediapipe as mp  # Add MediaPipe import
-from moviepy.editor import (
-    VideoFileClip, TextClip, CompositeVideoClip, 
-    ColorClip, ImageClip, concatenate_videoclips, VideoClip
-)
+from moviepy.video.io.VideoFileClip import VideoFileClip
+from moviepy.video.VideoClip import TextClip, ColorClip, ImageClip
+from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
+from moviepy.video.compositing.concatenate import concatenate_videoclips
+from moviepy.video.VideoClip import VideoClip
 from tqdm import tqdm
 import zhconv  # For converting between Chinese variants
 import requests
