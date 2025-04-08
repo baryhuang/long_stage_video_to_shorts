@@ -69,15 +69,17 @@ openai_client = openai.Client(api_key=OPENAI_API_KEY)
 
 class TranscriptionSegment:
     """Represents a transcription segment with timing information and word-level timestamps"""
-    def __init__(self, text: str, start: float, end: float, words: Optional[List[Dict[str, Any]]] = None):
+    def __init__(self, text: str, start: float, end: float, words: Optional[List[Dict[str, Any]]] = None, speaker: Optional[str] = None):
         self.text = text
         self.start = start
         self.end = end
         self.duration = end - start
         self.words = words or []  # List of word timestamps {text, start, end}
+        self.speaker = speaker  # Add speaker field
 
     def __str__(self):
-        return f"{self.start:.2f}s - {self.end:.2f}s: {self.text}"
+        speaker_info = f"[Speaker {self.speaker}] " if self.speaker else ""
+        return f"{self.start:.2f}s - {self.end:.2f}s: {speaker_info}{self.text}"
 
 class HighlightClip:
     """Represents a potential highlight clip with score and timing information"""
@@ -159,7 +161,8 @@ def transcribe_video(video_path: str, language_code: str = "zh") -> List[Transcr
                     text=seg_data['text'],
                     start=seg_data['start'],
                     end=seg_data['end'],
-                    words=seg_data.get('words', [])  # Load word-level timestamps if available
+                    words=seg_data.get('words', []),  # Include word-level timestamps
+                    speaker=seg_data.get('speaker')  # Load speaker information
                 ))
             logger.info(f"Loaded {len(segments)} segments from existing transcript")
             return segments
@@ -185,12 +188,12 @@ def transcribe_video(video_path: str, language_code: str = "zh") -> List[Transcr
             audio.write_audiofile(str(temp_audio_path), codec='pcm_s16le', ffmpeg_params=["-ac", "1"])
             audio.close()
         
-        logger.info(f"Transcribing audio...")
+        logger.info(f"Transcribing audio with speaker diarization...")
         
         # Create the transcriber with configuration
         config = aai.TranscriptionConfig(
             language_code=language_code,
-            speaker_labels=True,
+            speaker_labels=True,  # Enable speaker diarization
             punctuate=True,
             format_text=True
         )
@@ -223,92 +226,40 @@ def transcribe_video(video_path: str, language_code: str = "zh") -> List[Transcr
                 
                 time.sleep(3)  # Wait 3 seconds before checking again
         
-        # Process word-level timestamps and group into segments
+        # Process utterances with speaker information
         segments = []
-        current_segment = []
-        current_words = []
-        current_start = None
         
-        # Process each word with its timestamp
-        for word in transcript.words:
-            if not current_start:
-                current_start = word.start / 1000  # Convert ms to seconds
+        # First, process utterances to get speaker information
+        logger.info("Processing speaker diarization results...")
+        for utterance in transcript.utterances:
+            # Convert text to traditional Chinese
+            text = zhconv.convert(utterance.text, 'zh-hant')
             
-            word_info = {
-                'text': word.text,
-                'start': word.start / 1000,  # Convert ms to seconds
-                'end': word.end / 1000       # Convert ms to seconds
-            }
-            
-            current_segment.append(word.text)
-            current_words.append(word_info)
-            
-            # Get the current text accumulated so far
-            current_text = ' '.join(current_segment)
-            
-            # Create a new segment when we hit any of these conditions:
-            # 1. Natural sentence ending punctuation
-            # 2. Long pause (> 1.5 seconds)
-            # 3. Sentence is getting too long (> 50 characters)
-            # 4. Natural break point detected by jieba
-            should_break = False
-            
-            # Check for sentence ending punctuation
-            if any(p in word.text for p in '.!?。！？'):
-                should_break = True
-            
-            # Check for long pause (if not the first word)
-            elif len(current_words) > 1:
-                pause_duration = word_info['start'] - current_words[-2]['end']
-                if pause_duration > 1.5:  # 1.5 second pause threshold
-                    should_break = True
-            
-            # Check sentence length
-            elif len(current_text) > 50:
-                # Use jieba to find a good break point
-                words_list = list(jieba.cut(current_text))
-                if len(words_list) > 1:  # If we can actually split it
-                    should_break = True
-            
-            # Check for natural break using jieba
-            elif len(current_text) > 15:  # Only check if we have enough text
-                words_list = list(jieba.cut(current_text))
-                # Break if we detect a complete phrase or clause
-                if any(w in ['的', '了', '和', '與', '但是', '所以', '因為', '如果'] for w in words_list[-2:]):
-                    should_break = True
-            
-            if should_break:
-                text = ' '.join(current_segment)
-                text = zhconv.convert(text, 'zh-hant')  # Convert to traditional Chinese
-                segments.append(TranscriptionSegment(
-                    text=text,
-                    start=current_start,
-                    end=word.end / 1000,  # Convert ms to seconds
-                    words=current_words
-                ))
-                current_segment = []
-                current_words = []
-                current_start = None
-        
-        # Add any remaining words as a segment
-        if current_segment:
-            text = ' '.join(current_segment)
-            text = zhconv.convert(text, 'zh-hant')  # Convert to traditional Chinese
-            segments.append(TranscriptionSegment(
+            # Create segment with speaker information
+            segment = TranscriptionSegment(
                 text=text,
-                start=current_start,
-                end=transcript.words[-1].end / 1000,  # Convert ms to seconds
-                words=current_words
-            ))
+                start=utterance.start / 1000,  # Convert ms to seconds
+                end=utterance.end / 1000,      # Convert ms to seconds
+                speaker=utterance.speaker,
+                words=[{
+                    'text': word.text,
+                    'start': word.start / 1000,
+                    'end': word.end / 1000
+                } for word in utterance.words] if hasattr(utterance, 'words') else []
+            )
+            segments.append(segment)
         
-        # Save transcript to file with word-level timestamps
+        logger.info(f"Found {len(segments)} segments with {len(set(seg.speaker for seg in segments))} unique speakers")
+        
+        # Save transcript to file with speaker information
         logger.info(f"Saving transcript to {transcript_path}")
         transcript_data = [
             {
                 'text': seg.text,
                 'start': seg.start,
                 'end': seg.end,
-                'words': seg.words  # Include word-level timestamps
+                'speaker': seg.speaker,
+                'words': seg.words
             }
             for seg in segments
         ]
@@ -1863,12 +1814,28 @@ def create_text_transcript(video_path: str, segments: List[TranscriptionSegment]
         f.write(f"Transcript for: {video_path_obj.name}\n")
         f.write("=" * 50 + "\n\n")
         
+        # Track current speaker for formatting
+        current_speaker = None
+        
         for i, seg in enumerate(sorted_segments, 1):
+            # Format timestamp
             timestamp = f"[{int(seg.start//60):02d}:{int(seg.start%60):02d}.{int((seg.start%1)*10):01d} - {int(seg.end//60):02d}:{int(seg.end%60):02d}.{int((seg.end%1)*10):01d}]"
+            
+            # Handle speaker changes
+            if seg.speaker != current_speaker:
+                current_speaker = seg.speaker
+                # Add a blank line before new speaker (except for first speaker)
+                if i > 1:
+                    f.write("\n")
+                # Write speaker header
+                if current_speaker:
+                    f.write(f"\nSpeaker {current_speaker}:\n{'-' * 20}\n")
+            
+            # Write the segment with timestamp and text
             f.write(f"{timestamp} {seg.text}\n")
             
-            # Add blank line every 5 segments for readability
-            if i % 5 == 0:
+            # Add blank line every 5 segments within same speaker for readability
+            if i % 5 == 0 and i < len(sorted_segments) and sorted_segments[i].speaker == current_speaker:
                 f.write("\n")
     
     logger.info(f"Created plain text transcript at: {transcript_path}")
@@ -1945,7 +1912,8 @@ def main():
                         text=seg['text'],
                         start=seg['start'],
                         end=seg['end'],
-                        words=seg.get('words', [])
+                        words=seg.get('words', []),  # Include word-level timestamps
+                        speaker=seg.get('speaker')  # Load speaker information
                     )
                     for seg in transcript_data
                 ]
@@ -1976,7 +1944,8 @@ def main():
                     'text': seg.text,
                     'start': seg.start,
                     'end': seg.end,
-                    'words': seg.words
+                    'words': seg.words,
+                    'speaker': seg.speaker
                 }
                 for seg in segments
             ])
