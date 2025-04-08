@@ -26,6 +26,7 @@ from moviepy.video.VideoClip import TextClip, ColorClip, ImageClip
 from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
 from moviepy.video.compositing.concatenate import concatenate_videoclips
 from moviepy.video.VideoClip import VideoClip
+from moviepy.audio.io.AudioFileClip import AudioFileClip  # Add this import
 from tqdm import tqdm
 import zhconv  # For converting between Chinese variants
 import requests
@@ -128,13 +129,13 @@ class FontManager:
 
 def transcribe_video(video_path: str, language_code: str = "zh") -> List[TranscriptionSegment]:
     """
-    Transcribe the video using AssemblyAI and return segments with timing information.
-    First extracts audio from video, then transcribes the audio.
+    Transcribe the video or audio file using AssemblyAI and return segments with timing information.
+    First extracts audio from video if needed, then transcribes the audio.
     Uses word-level timestamps for more precise timing information.
     If a transcript file already exists, load it instead of re-transcribing.
     
     Args:
-        video_path: Path to the video file
+        video_path: Path to the video or audio file
         language_code: Language code (zh for Traditional Chinese)
     
     Returns:
@@ -165,14 +166,24 @@ def transcribe_video(video_path: str, language_code: str = "zh") -> List[Transcr
         except Exception as e:
             logger.warning(f"Failed to load existing transcript: {e}. Will re-transcribe.")
     
-    logger.info(f"Extracting audio from video: {video_path}")
+    logger.info(f"Processing file: {video_path}")
     
     # Extract audio to temporary file
     temp_audio_path = video_path_obj.with_suffix('.temp.wav')
     try:
-        video = VideoFileClip(video_path)
-        video.audio.write_audiofile(str(temp_audio_path), codec='pcm_s16le', ffmpeg_params=["-ac", "1"])
-        video.close()
+        # Check if input is video or audio
+        is_video = video_path.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm'))
+        
+        if is_video:
+            logger.info("Input is video, extracting audio...")
+            video = VideoFileClip(video_path)
+            video.audio.write_audiofile(str(temp_audio_path), codec='pcm_s16le', ffmpeg_params=["-ac", "1"])
+            video.close()
+        else:
+            logger.info("Input is audio, converting to WAV format...")
+            audio = AudioFileClip(video_path)
+            audio.write_audiofile(str(temp_audio_path), codec='pcm_s16le', ffmpeg_params=["-ac", "1"])
+            audio.close()
         
         logger.info(f"Transcribing audio...")
         
@@ -1866,7 +1877,7 @@ def create_text_transcript(video_path: str, segments: List[TranscriptionSegment]
 def main():
     """Main function to process video and create highlight clips"""
     parser = argparse.ArgumentParser(description='Generate highlight clips from long videos')
-    parser.add_argument('input_video', help='Path to the input video file')
+    parser.add_argument('input_file', help='Path to the input video or audio file')
     parser.add_argument('--output', '-o', help='Path to the output video file')
     parser.add_argument('--max-duration', '-d', type=float, default=120.0, 
                       help='Target duration for the highlight clip in seconds (default: 120)')
@@ -1889,9 +1900,18 @@ def main():
     
     args = parser.parse_args()
     
+    # Check if input is audio or video
+    input_path = Path(args.input_file)
+    is_video = input_path.suffix.lower() in ['.mp4', '.avi', '.mov', '.mkv', '.webm']
+    
+    # If audio file and not transcribe-only, show error
+    if not is_video and not args.transcribe_only:
+        logger.error("Audio files are only supported with --transcribe-only flag")
+        return
+    
     # Default output path if not specified
-    if not args.output:
-        input_path = Path(args.input_video)
+    if not args.output and is_video:  # Only set output path for video files
+        input_path = Path(args.input_file)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         args.output = str(input_path.with_name(f"{input_path.stem}_highlight_{timestamp}{input_path.suffix}"))
         logger.info(f"Setting default output path to: {args.output}")
@@ -1915,74 +1935,72 @@ def main():
         highlight = None
         in_title_generation = False
 
-        # Step 1: Load or generate transcription if needed
-        # We need transcription in two cases:
-        # 1. Not using full video mode
-        # 2. Using full video mode but subtitles are requested
-        need_transcription = not args.full_video or (args.full_video and args.add_subtitles)
-        
-        if need_transcription:
-            if args.resume_from in ['transcribe', 'segments', 'titles']:
-                # Load transcription state
-                transcript_data = load_state(args.input_video, 'transcript')
-                if transcript_data:
-                    segments = [
-                        TranscriptionSegment(
-                            text=seg['text'],
-                            start=seg['start'],
-                            end=seg['end'],
-                            words=seg.get('words', [])
-                        )
-                        for seg in transcript_data
-                    ]
-                    logger.info(f"Loaded transcription with {len(segments)} segments")
-                    
-                    # If using transcribe_only mode, create text transcript file
-                    if args.transcribe_only:
-                        transcript_txt_path = Path(args.input_video).with_suffix('.transcript.txt')
-                        if not transcript_txt_path.exists():
-                            logger.info("Creating plain text transcript file from loaded state...")
-                            create_text_transcript(args.input_video, segments)
-                        logger.info("Transcription data loaded. Exiting as --transcribe-only flag was set.")
-                        return
-                else:
-                    logger.error("No transcription state found to resume from")
-                    if args.full_video:
-                        # For full video mode, we can continue without transcription if not resuming
-                        logger.info("Continuing without transcription in full video mode")
-                        segments = None
-                    else:
-                        return
-            else:
-                logger.info("Generating transcription...")
-                segments = transcribe_video(args.input_video, args.language_code)
-                # Save transcription state
-                save_state(args.input_video, 'transcript', [
-                    {
-                        'text': seg.text,
-                        'start': seg.start,
-                        'end': seg.end,
-                        'words': seg.words
-                    }
-                    for seg in segments
-                ])
+        # Step 1: Load or generate transcription
+        if args.resume_from in ['transcribe', 'segments', 'titles']:
+            # Load transcription state
+            transcript_data = load_state(args.input_file, 'transcript')
+            if transcript_data:
+                segments = [
+                    TranscriptionSegment(
+                        text=seg['text'],
+                        start=seg['start'],
+                        end=seg['end'],
+                        words=seg.get('words', [])
+                    )
+                    for seg in transcript_data
+                ]
+                logger.info(f"Loaded transcription with {len(segments)} segments")
                 
-                # If transcribe_only flag is set, exit after transcription
+                # If using transcribe_only mode, create text transcript file
                 if args.transcribe_only:
-                    # Create plain text transcript file if it doesn't exist
-                    transcript_txt_path = Path(args.input_video).with_suffix('.transcript.txt')
+                    transcript_txt_path = Path(args.input_file).with_suffix('.transcript.txt')
                     if not transcript_txt_path.exists():
-                        logger.info("Creating plain text transcript file...")
-                        create_text_transcript(args.input_video, segments)
-                    
-                    logger.info("Transcription completed. Exiting as --transcribe-only flag was set.")
+                        logger.info("Creating plain text transcript file from loaded state...")
+                        create_text_transcript(args.input_file, segments)
+                    logger.info("Transcription data loaded. Exiting as --transcribe-only flag was set.")
                     return
+            else:
+                logger.error("No transcription state found to resume from")
+                if args.full_video and is_video:
+                    # For full video mode, we can continue without transcription if not resuming
+                    logger.info("Continuing without transcription in full video mode")
+                    segments = None
+                else:
+                    return
+        else:
+            logger.info("Generating transcription...")
+            segments = transcribe_video(args.input_file, args.language_code)
+            # Save transcription state
+            save_state(args.input_file, 'transcript', [
+                {
+                    'text': seg.text,
+                    'start': seg.start,
+                    'end': seg.end,
+                    'words': seg.words
+                }
+                for seg in segments
+            ])
+            
+            # If transcribe_only flag is set, exit after transcription
+            if args.transcribe_only:
+                # Create plain text transcript file if it doesn't exist
+                transcript_txt_path = Path(args.input_file).with_suffix('.transcript.txt')
+                if not transcript_txt_path.exists():
+                    logger.info("Creating plain text transcript file...")
+                    create_text_transcript(args.input_file, segments)
+                
+                logger.info("Transcription completed. Exiting as --transcribe-only flag was set.")
+                return
+
+        # Skip video processing for audio files
+        if not is_video:
+            return
 
         # If manual title is provided, create highlight object directly
         if args.manual_title:
             if args.full_video:
                 # Create a segment for the full video
-                segments_data = create_full_video_segment(args.input_video)
+                segments_data = create_full_video_segment(args.input_file)
                 # Create highlight object with manual title
                 highlight = HighlightClip(
                     start=float(segments_data['segments'][0]['start_time']),
@@ -2000,12 +2018,12 @@ def main():
         # Step 2: Load or identify segments (if not already done with manual title)
         if args.full_video and not highlight:
             # Create a segment for the full video
-            segments_data = create_full_video_segment(args.input_video)
+            segments_data = create_full_video_segment(args.input_file)
             logger.info("Using full video as a single segment")
             in_title_generation = True  # Skip segment selection
         elif not args.full_video and args.resume_from in ['segments', 'titles'] and not highlight:
             # Load segments state
-            segments_data = load_state(args.input_video, 'segments')
+            segments_data = load_state(args.input_file, 'segments')
             if not segments_data:
                 logger.error("No segments state found to resume from")
                 return
@@ -2014,7 +2032,7 @@ def main():
         # Step 3: Load titles if resuming from titles (if not already done with manual title)
         if not highlight and args.resume_from == 'titles':
             # Load titles state
-            titles_data = load_state(args.input_video, 'titles')
+            titles_data = load_state(args.input_file, 'titles')
             if titles_data and titles_data.get('segments'):
                 title_data = titles_data['segments'][0]  # We now only have one highlight
                 # Create highlight object from the saved state
@@ -2042,7 +2060,7 @@ def main():
                         logger.error("No segment identified")
                         return
                     # Save segments state
-                    save_state(args.input_video, 'segments', segments_data)
+                    save_state(args.input_file, 'segments', segments_data)
                 
                 print("\nSelected Segment:")
                 print("-" * 50)
@@ -2082,7 +2100,7 @@ def main():
                     if highlights:
                         highlight = highlights[0]  # We now only have one highlight
                         # Save titles state
-                        save_state(args.input_video, 'titles', {
+                        save_state(args.input_file, 'titles', {
                             'segments': [
                                 {
                                     'title': highlight.title,
@@ -2097,7 +2115,7 @@ def main():
                     segments_data = identify_highlights(segments, args.max_duration)
                     if segments_data:
                         # Save segments state
-                        save_state(args.input_video, 'segments', segments_data)
+                        save_state(args.input_file, 'segments', segments_data)
                         # Reset title generation variables
                         highlights = []
                         highlight = None
@@ -2113,7 +2131,7 @@ def main():
                     if highlights:
                         highlight = highlights[0]  # We now only have one highlight
                         # Save titles state
-                        save_state(args.input_video, 'titles', {
+                        save_state(args.input_file, 'titles', {
                             'segments': [
                                 {
                                     'title': highlight.title,
@@ -2146,7 +2164,7 @@ def main():
                         if highlights:
                             highlight = highlights[0]
                             # Save titles state
-                            save_state(args.input_video, 'titles', {
+                            save_state(args.input_file, 'titles', {
                                 'segments': [
                                     {
                                         'title': highlight.title,
@@ -2165,7 +2183,7 @@ def main():
                             highlight.title = new_title
                             highlight.score = 100.0  # Perfect score for manual titles
                             # Save titles state
-                            save_state(args.input_video, 'titles', {
+                            save_state(args.input_file, 'titles', {
                                 'segments': [
                                     {
                                         'title': highlight.title,
@@ -2182,7 +2200,7 @@ def main():
                 
                 # Create highlight video
                 create_highlight_video(
-                    args.input_video,
+                    args.input_file,
                     highlight,
                     segments,  # Always pass segments if available (for subtitles)
                     args.output,
