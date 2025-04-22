@@ -71,7 +71,8 @@ def create_layout_preview(
         frame_clip,
         min_zoom=zoom_factor,
         max_zoom=zoom_factor,
-        smoothing_window=15
+        smoothing_window=15,
+        vertical_position_ratio=vertical_position_ratio
     )
     processed_frame = processed_clip.get_frame(0)
     processed_clip.close()
@@ -85,9 +86,6 @@ def create_layout_preview(
     output_height = 1920
     logger.info(f"Output dimensions (9:16): {output_width}x{output_height} (width x height)")
     
-    # Create black background
-    preview = Image.new('RGB', (output_width, output_height), 'black')
-    
     # Set video section to exactly 50% of total height
     video_section_height = int(output_height * 0.5)  # 50% of total height
     
@@ -95,22 +93,28 @@ def create_layout_preview(
     aspect_ratio = frame_image.width / frame_image.height
     video_section_width = int(video_section_height * aspect_ratio)
     
-    # If width exceeds screen width, adjust accordingly
-    if video_section_width > output_width:
-        video_section_width = output_width
-        video_section_height = int(video_section_width / aspect_ratio)
-    
-    # Resize frame to fit the calculated dimensions
+    # Resize frame to fit the calculated dimensions (always use 50% height, allow width to exceed screen)
     frame_resized = frame_image.resize((video_section_width, video_section_height), Image.Resampling.LANCZOS)
     logger.info(f"Resized video frame dimensions: {video_section_width}x{video_section_height} (width x height)")
     
-    # Calculate position to center the frame exactly
+    # Calculate position to center the frame exactly horizontally
     frame_x = (output_width - video_section_width) // 2
     video_section_y = (output_height - video_section_height) // 2  # Center vertically
     logger.info(f"Video frame position: x={frame_x}, y={video_section_y}")
     
+    # Create a temporary image that can hold the oversized frame if needed
+    temp_width = max(output_width, video_section_width)
+    temp_preview = Image.new('RGB', (temp_width, output_height), 'black')
+    
     # Paste the frame at the calculated position
-    preview.paste(frame_resized, (frame_x, video_section_y))
+    temp_preview.paste(frame_resized, (frame_x, video_section_y))
+    
+    # Crop the center portion if the width exceeds the output width
+    if temp_width > output_width:
+        left = (temp_width - output_width) // 2
+        preview = temp_preview.crop((left, 0, left + output_width, output_height))
+    else:
+        preview = temp_preview
     
     # Create draw object
     draw = ImageDraw.Draw(preview)
@@ -139,7 +143,8 @@ def create_layout_preview(
         church_name_y = max(title_margin, video_section_y - top_text_height + title_margin)
     
     main_title_y = church_name_y + church_name_height + main_title_height//2
-    service_info_y = main_title_y + main_title_height//2 + service_info_height//2
+    # Add more space between main title and service info (increase by 30px)
+    service_info_y = main_title_y + main_title_height//2 + service_info_height//2 + 30
     
     # Position subtitle below video section
     subtitle_margin = 40

@@ -60,7 +60,8 @@ def create_zoom_preview(
         frame_clip,
         min_zoom=zoom_factor,
         max_zoom=zoom_factor,
-        smoothing_window=15
+        smoothing_window=15,
+        vertical_position_ratio=vertical_position_ratio
     )
     processed_frame = processed_clip.get_frame(0)
     processed_clip.close()

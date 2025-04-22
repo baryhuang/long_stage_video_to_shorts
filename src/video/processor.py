@@ -245,7 +245,8 @@ def apply_zoomed_pan_effect(clip: VideoFileClip,
 def track_and_zoom_video(clip: VideoFileClip, 
                         min_zoom: float = 1.0, 
                         max_zoom: float = 1.5,
-                        smoothing_window: int = 15) -> VideoFileClip:
+                        smoothing_window: int = 15,
+                        vertical_position_ratio: float = 0.5) -> VideoFileClip:
     """
     Track faces in a video and apply smooth zoom and pan effects.
     
@@ -254,6 +255,7 @@ def track_and_zoom_video(clip: VideoFileClip,
         min_zoom: Minimum zoom factor
         max_zoom: Maximum zoom factor
         smoothing_window: Number of frames to average for smoothing
+        vertical_position_ratio: Ratio for vertical positioning (0-1, where 0.5 is center)
     
     Returns:
         Processed video clip with smart zooming
@@ -273,7 +275,7 @@ def track_and_zoom_video(clip: VideoFileClip,
     default_zoom = (min_zoom + max_zoom) / 2
     track_cache['zoom_history'] = [default_zoom] * smoothing_window
     track_cache['center_x_history'] = [0.5] * smoothing_window
-    track_cache['center_y_history'] = [0.5] * smoothing_window
+    track_cache['center_y_history'] = [vertical_position_ratio] * smoothing_window
     
     # Define the simple processing function for each frame that only applies zoom and tracking
     # without face detection, using the parameters directly
@@ -281,9 +283,9 @@ def track_and_zoom_video(clip: VideoFileClip,
         try:
             h, w = frame.shape[:2]
             
-            # Use vertical_position_ratio of 0.5 (center) when not detecting faces
+            # Use provided vertical_position_ratio instead of hardcoded 0.5
             center_x = 0.5  # Center horizontally
-            center_y = 0.5  # Center vertically
+            center_y = vertical_position_ratio  # Use the vertical position ratio
             
             # Calculate crop region
             crop_w = w / min_zoom

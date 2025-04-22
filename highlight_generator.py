@@ -107,7 +107,8 @@ def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float
     return track_and_zoom_video(clip, 
                                min_zoom=zoom_factor, 
                                max_zoom=zoom_factor,
-                               smoothing_window=15)
+                               smoothing_window=15,
+                               vertical_position_ratio=vertical_position_ratio)
 
 def create_full_video_segment(video_path: str) -> Dict[str, Any]:
     """
@@ -249,10 +250,13 @@ def create_highlight_video(
     
     # Apply zoom and tracking with vertical position ratio
     logger.info(f"Applying {zoom_factor*100}% zoom and horizontal person tracking with vertical position ratio {vertical_position_ratio}...")
-    processed_clip = track_and_zoom_video(video, 
-                               min_zoom=zoom_factor, 
-                               max_zoom=zoom_factor,
-                               smoothing_window=15)
+    processed_clip = track_and_zoom_video(
+        video, 
+        min_zoom=zoom_factor, 
+        max_zoom=zoom_factor,
+        smoothing_window=15,
+        vertical_position_ratio=vertical_position_ratio
+    )
     
     # Calculate dimensions for 9:16 portrait format
     output_width = 1080
@@ -264,34 +268,64 @@ def create_highlight_video(
     video_section_height = int(output_height * 0.5)  # Exactly 50% of the total height
     logger.info(f"Video section dimensions: {video_section_width}x{video_section_height} (width x height)")
     
+    # Position the video section in the center vertically
+    video_section_y = (output_height - video_section_height) // 2
+    
+    # Text position constants
+    title_margin = 25
+    church_name_height = 100
+    main_title_height = 100
+    service_info_height = 50
+    
+    # Calculate text positions above the video section
+    top_text_height = church_name_height + main_title_height + service_info_height + title_margin*2
+    
+    # Position church name at the top with margin
+    church_name_y = title_margin
+    
+    # If that would overlap with video, position church name so all text fits above video
+    if church_name_y + top_text_height > video_section_y:
+        # Position church name so that all text elements end right before video section
+        church_name_y = max(title_margin, video_section_y - top_text_height + title_margin)
+    
+    main_title_y = church_name_y + church_name_height + main_title_height//2
+    # Add more space between main title and service info (increase by 30px)
+    service_info_y = main_title_y + main_title_height//2 + service_info_height//2 + 30
+    
     # Resize video while maintaining aspect ratio to fit the desired size
     orig_height, orig_width = processed_clip.size[1], processed_clip.size[0]
     
-    # Calculate scale factors for both width and height
-    width_scale = video_section_width / orig_width
-    height_scale = video_section_height / orig_height
-    
-    # Use the smaller scale factor to ensure the video fits completely
-    scale_factor = min(width_scale, height_scale)
+    # Calculate the scaled size based on 50% of the output height
+    scale_factor = video_section_height / orig_height
     scaled_width = int(orig_width * scale_factor)
-    scaled_height = int(orig_height * scale_factor)
+    scaled_height = video_section_height  # Always 50% of the total height
     
     # Resize the video
     processed_clip = processed_clip.resize(width=scaled_width, height=scaled_height)
     logger.info(f"Resized video dimensions: {scaled_width}x{scaled_height} (width x height)")
     
-    # Calculate position to center the video
+    # Calculate position to center the video horizontally
     x_offset = (video_section_width - scaled_width) // 2
-    y_offset = (video_section_height - scaled_height) // 2
+    y_offset = 0  # No vertical offset needed as we're using exactly 50% height
     
     # Create black background for the 9:16 format
     black_bg = ColorClip(size=(output_width, output_height), color=(0, 0, 0))
     black_bg = black_bg.set_duration(video.duration)
     
-    # Position the video exactly in the center of the screen
-    video_section_y = (output_height - video_section_height) // 2
-    video_y = video_section_y + y_offset
-    video_x = x_offset if x_offset > 0 else 0
+    # Position the video in the center vertically
+    video_y = video_section_y
+    
+    # If video is wider than output width, we'll need to crop it
+    if scaled_width > output_width:
+        # Create a crop effect to show only the center portion of the wider video
+        x_crop_offset = (scaled_width - output_width) // 2
+        processed_clip = processed_clip.crop(x1=x_crop_offset, y1=0, x2=x_crop_offset+output_width, y2=scaled_height)
+        video_x = 0
+        logger.info(f"Video wider than screen, cropping {x_crop_offset}px from each side")
+    else:
+        # Center the video if it's narrower than the output width
+        video_x = x_offset if x_offset > 0 else 0
+    
     video_pos = (video_x if video_x != 0 else 'center', video_y)
     logger.info(f"Video position: x={video_x if video_x != 0 else 'center'}, y={video_y} (distance from top)")
     
