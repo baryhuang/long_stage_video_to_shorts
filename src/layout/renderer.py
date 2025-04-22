@@ -2,179 +2,30 @@
 # -*- coding: utf-8 -*-
 
 """
-Highlight video generator that extracts engaging segments from longer videos.
-The output is in 9:16 portrait format with traditional Chinese titles and subtitles.
+Layout renderer module for creating highlight videos with specific layouts.
 """
 
 import os
-import sys
-import json
-import time
 import logging
-import argparse
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import List, Tuple, Dict, Optional, Any
 
-import cv2
+import jieba
+import zhconv
 import numpy as np
-from dotenv import load_dotenv
-import assemblyai as aai
-from anthropic import Anthropic
-import mediapipe as mp
+from PIL import Image, ImageFont
 from moviepy.video.io.VideoFileClip import VideoFileClip
 from moviepy.video.VideoClip import TextClip, ColorClip, ImageClip
 from moviepy.video.compositing.CompositeVideoClip import CompositeVideoClip
-from moviepy.video.compositing.concatenate import concatenate_videoclips
-from moviepy.video.VideoClip import VideoClip
-from moviepy.audio.io.AudioFileClip import AudioFileClip
-from tqdm import tqdm
-import zhconv  # For converting between Chinese variants
-import requests
-import openai
-from PIL import Image, ImageDraw, ImageFont
-import jieba
 
-# Import the classes and functions from src modules
+from src.models.font import FontManager
 from src.models.transcription import TranscriptionSegment
 from src.models.highlight import HighlightClip
-from src.models.font import FontManager
-from src.transcription.transcriber import transcribe_video, create_text_transcript
 from src.video.processor import track_and_zoom_video
-from src.highlights.analyzer import identify_highlights
-from src.highlights.titles import generate_titles
 from src.video.preview import create_zoom_preview
 from src.layout.preview import create_layout_preview
-from src.layout.renderer import create_highlight_video
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler()]
-)
 logger = logging.getLogger(__name__)
-
-# Load environment variables
-load_dotenv()
-
-# Get API keys from environment
-ASSEMBLY_API_KEY = os.getenv("ASSEMBLY_API_KEY")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not ASSEMBLY_API_KEY:
-    logger.error("AssemblyAI API key not found. Please set the ASSEMBLY_API_KEY environment variable.")
-    sys.exit(1)
-
-if not ANTHROPIC_API_KEY:
-    logger.error("Anthropic API key not found. Please set the ANTHROPIC_API_KEY environment variable.")
-    sys.exit(1)
-
-if not OPENAI_API_KEY:
-    logger.error("OpenAI API key not found. Please set the OPENAI_API_KEY environment variable.")
-    sys.exit(1)
-
-# Initialize API clients
-aai.settings.api_key = ASSEMBLY_API_KEY
-# anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
-openai_client = openai.Client(api_key=OPENAI_API_KEY)
-
-def save_state(video_path: str, state_name: str, data: Any):
-    """Save state data to a JSON file"""
-    video_path_obj = Path(video_path)
-    state_file = video_path_obj.with_name(f"{video_path_obj.stem}_{state_name}.state.json")
-    with open(state_file, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    logger.info(f"Saved {state_name} state to {state_file}")
-
-def load_state(video_path: str, state_name: str) -> Optional[Any]:
-    """Load state data from a JSON file if it exists"""
-    video_path_obj = Path(video_path)
-    state_file = video_path_obj.with_name(f"{video_path_obj.stem}_{state_name}.state.json")
-    if state_file.exists():
-        try:
-            with open(state_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-            logger.info(f"Loaded {state_name} state from {state_file}")
-            return data
-        except Exception as e:
-            logger.warning(f"Failed to load {state_name} state: {e}")
-    return None
-
-def process_video_with_zoom_and_tracking(clip: VideoFileClip, zoom_factor: float = 2.0, vertical_position_ratio: float = 0.5) -> VideoFileClip:
-    """Use track_and_zoom_video from the video processor module.
-    This function is kept for backwards compatibility."""
-    return track_and_zoom_video(clip, 
-                               min_zoom=zoom_factor, 
-                               max_zoom=zoom_factor,
-                               smoothing_window=15)
-
-def create_full_video_segment(video_path: str) -> Dict[str, Any]:
-    """
-    Create a segment that covers the entire video.
-    
-    Args:
-        video_path: Path to the video file
-    
-    Returns:
-        Dictionary containing segment information for the full video
-    """
-    # Get video duration
-    video = VideoFileClip(video_path)
-    duration = video.duration
-    video.close()
-    
-    # Create a segment covering the entire video
-    return {
-        "segments": [
-            {
-                "start_time": 0.0,
-                "end_time": duration,
-                "content": "完整影片",  # "Full video" in Traditional Chinese
-                "reason": "使用完整影片進行處理"  # "Processing the entire video" in Traditional Chinese
-            }
-        ],
-        "theme": "完整影片處理"  # "Full video processing" in Traditional Chinese
-    }
-
-def find_supported_files(folder_path: str) -> List[str]:
-    """
-    Recursively find all supported audio and video files in a folder.
-    
-    Args:
-        folder_path: Path to the folder to search
-        
-    Returns:
-        List of paths to supported files
-    """
-    supported_extensions = {
-        '.mp4', '.avi', '.mov', '.mkv', '.webm',  # Video formats
-        '.mp3', '.wav', '.m4a', '.aac', '.ogg'    # Audio formats
-    }
-    
-    found_files = []
-    
-    try:
-        for root, _, files in os.walk(folder_path):
-            for file in files:
-                if any(file.lower().endswith(ext) for ext in supported_extensions):
-                    full_path = os.path.join(root, file)
-                    found_files.append(full_path)
-        
-        # Sort files for consistent processing order
-        found_files.sort()
-        
-        if not found_files:
-            logger.warning(f"No supported files found in {folder_path}")
-        else:
-            logger.info(f"Found {len(found_files)} supported files in {folder_path}")
-            for file in found_files:
-                logger.info(f"- {file}")
-    
-    except Exception as e:
-        logger.error(f"Error searching folder {folder_path}: {e}")
-        return []
-    return found_files
 
 def create_highlight_video(
     input_path: str, 
@@ -249,10 +100,12 @@ def create_highlight_video(
     
     # Apply zoom and tracking with vertical position ratio
     logger.info(f"Applying {zoom_factor*100}% zoom and horizontal person tracking with vertical position ratio {vertical_position_ratio}...")
-    processed_clip = track_and_zoom_video(video, 
-                               min_zoom=zoom_factor, 
-                               max_zoom=zoom_factor,
-                               smoothing_window=15)
+    processed_clip = track_and_zoom_video(
+        video, 
+        min_zoom=zoom_factor, 
+        max_zoom=zoom_factor,
+        smoothing_window=15
+    )
     
     # Calculate dimensions for 9:16 portrait format
     output_width = 1080
@@ -310,6 +163,27 @@ def create_highlight_video(
     
     # Position banner image and text elements relative to the video section
     banner_height = 0  # Default to 0 if no banner image
+    
+    # Text position constants
+    title_margin = 25
+    church_name_height = 100
+    main_title_height = 100
+    service_info_height = 50
+    
+    # Calculate text positions above the video section
+    # Position text elements above the video
+    top_text_height = church_name_height + main_title_height + service_info_height + title_margin*2
+    
+    # Position church name at the top with margin
+    church_name_y = title_margin
+    
+    # If that would overlap with video, position church name so all text fits above video
+    if church_name_y + top_text_height > video_section_y:
+        # Position church name so that all text elements end right before video section
+        church_name_y = max(title_margin, video_section_y - top_text_height + title_margin)
+    
+    main_title_y = church_name_y + church_name_height + main_title_height//2
+    service_info_y = main_title_y + main_title_height//2 + service_info_height//2
     
     # Add banner image at the top if provided
     banner_clip = None
@@ -740,257 +614,4 @@ def create_highlight_video(
         remove_temp=True
     )
     
-    logger.info("Highlight video creation complete")
-
-def process_single_file(
-    input_file: str,
-    output_file: Optional[str],
-    args: argparse.Namespace
-) -> bool:
-    """
-    Process a single file with the given arguments.
-    
-    Args:
-        input_file: Path to input file
-        output_file: Path to output file (optional)
-        args: Command line arguments
-        
-    Returns:
-        bool: True if processing was successful
-    """
-    try:
-        # Check if input is audio or video
-        is_video = input_file.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm'))
-        
-        # If audio file and not transcribe-only, skip
-        if not is_video and not args.transcribe_only:
-            logger.warning(f"Skipping audio file {input_file} (use --transcribe-only for audio files)")
-            return False
-        
-        # Default output path for video files
-        if not output_file and is_video:
-            input_path = Path(input_file)
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            output_file = str(input_path.with_name(f"{input_path.stem}_highlight_{timestamp}{input_path.suffix}"))
-            logger.info(f"Setting default output path to: {output_file}")
-
-        # Step 1: Load or generate transcription
-        if args.resume_from in ['transcribe', 'segments', 'titles']:
-            # Load transcription state
-            transcript_data = load_state(input_file, 'transcript')
-            if transcript_data:
-                segments = [
-                    TranscriptionSegment(
-                        text=seg['text'],
-                        start=seg['start'],
-                        end=seg['end'],
-                        words=seg.get('words', []),
-                        speaker=seg.get('speaker')
-                    )
-                    for seg in transcript_data
-                ]
-                logger.info(f"Loaded transcription with {len(segments)} segments")
-                
-                # If using transcribe_only mode, create text transcript file
-                if args.transcribe_only:
-                    transcript_txt_path = Path(input_file).with_suffix('.transcript.txt')
-                    if not transcript_txt_path.exists():
-                        logger.info("Creating plain text transcript file from loaded state...")
-                        create_text_transcript(input_file, segments)
-                    logger.info("Transcription data loaded. Exiting as --transcribe-only flag was set.")
-                    return True
-            else:
-                logger.error("No transcription state found to resume from")
-                if args.full_video and is_video:
-                    logger.info("Continuing without transcription in full video mode")
-                    segments = None
-                else:
-                    return False
-        else:
-            logger.info("Generating transcription...")
-            segments = transcribe_video(input_file, args.language_code)
-            
-            # If transcribe_only flag is set, exit after transcription
-            if args.transcribe_only:
-                # Create plain text transcript file if it doesn't exist
-                transcript_txt_path = Path(input_file).with_suffix('.transcript.txt')
-                if not transcript_txt_path.exists():
-                    logger.info("Creating plain text transcript file...")
-                    create_text_transcript(input_file, segments)
-                
-                logger.info("Transcription completed.")
-                return True
-
-        # Skip video processing for audio files
-        if not is_video:
-            return True
-        
-        # Step 2: Load or identify highlight segments
-        if args.full_video:
-            logger.info("Using full video mode (skipping segment identification)")
-            segments_data = create_full_video_segment(input_file)
-        elif args.resume_from in ['segments', 'titles']:
-            segments_data = load_state(input_file, 'segments')
-            if not segments_data:
-                logger.error("No segments state found to resume from")
-                return False
-        else:
-            logger.info("Identifying engaging segments...")
-            segments_data = identify_highlights(segments, args.max_duration)
-            save_state(input_file, 'segments', segments_data)
-
-        # Step 3: Generate or load titles
-        if args.manual_title:
-            main_title = args.manual_title
-            highlights = []
-            for seg in segments_data['segments']:
-                highlight = HighlightClip(
-                    start=float(seg['start_time']),
-                    end=float(seg['end_time']),
-                    score=80.0,  # Default score
-                    title=main_title
-                )
-                highlights.append(highlight)
-        elif args.resume_from == 'titles':
-            titles_data = load_state(input_file, 'titles')
-            if titles_data:
-                main_title = titles_data.get('main_title', '')
-                highlights = [
-                    HighlightClip(
-                        start=float(h['start']),
-                        end=float(h['end']),
-                        score=float(h['score']),
-                        title=h['title']
-                    )
-                    for h in titles_data.get('highlights', [])
-                ]
-            else:
-                logger.error("No titles state found to resume from")
-                return False
-        else:
-            logger.info("Generating titles...")
-            main_title, highlights = generate_titles(segments_data)
-            titles_data = {
-                'main_title': main_title,
-                'highlights': [
-                    {
-                        'start': h.start,
-                        'end': h.end,
-                        'score': h.score,
-                        'title': h.title
-                    }
-                    for h in highlights
-                ]
-            }
-            save_state(input_file, 'titles', titles_data)
-
-        # Step 4: Create highlight video
-        if not highlights:
-            logger.error("No highlights found to process")
-            return False
-
-        highlight = highlights[0]  # Use the first (or only) highlight
-        logger.info(f"Selected highlight: {highlight}")
-
-        # Create the highlight video
-        create_highlight_video(
-            input_path=input_file,
-            highlight=highlight,
-            segments=segments,
-            output_path=output_file,
-            main_title=main_title or highlight.title,
-            logo_path=args.logo,
-            add_subtitles=args.add_subtitles,
-            vertical_position_ratio=args.vertical_position,
-            background_image_path=args.background_image,
-            zoom_factor=args.zoom_factor
-        )
-        
-        logger.info(f"Highlight video created successfully: {output_file}")
-        return True
-    
-    except Exception as e:
-        logger.error(f"Error processing file {input_file}: {e}")
-        return False
-
-def main():
-    """Main function to process video and create highlight clips"""
-    parser = argparse.ArgumentParser(description='Generate highlight clips from long videos')
-    input_group = parser.add_mutually_exclusive_group(required=True)
-    input_group.add_argument('--input-file', '-i', help='Path to the input video or audio file')
-    input_group.add_argument('--input-folder', '-f', help='Path to folder containing video/audio files')
-    parser.add_argument('--output', '-o', help='Path to the output video file (only used with --input-file)')
-    parser.add_argument('--max-duration', '-d', type=float, default=120.0, 
-                      help='Target duration for the highlight clip in seconds (default: 120)')
-    parser.add_argument('--logo', '-l', 
-                      default=os.path.join(os.path.dirname(__file__), 'default_assets', 'Waymaker_white_logo_transparent_background.png'),
-                      help='Path to logo image file (default: default_assets/Waymaker_white_logo_transparent_background.png)')
-    parser.add_argument('--background-image', '-b', 
-                      help='Path to banner image to display at the top of the video (default: none)')
-    parser.add_argument('--zoom-factor', '-z', type=float, default=2.0,
-                      help='Zoom factor for the video (default: 2.0 for 200%% zoom)')
-    parser.add_argument('--resume-from', '-r', choices=['transcribe', 'segments', 'titles'],
-                      help='Resume from a specific stage using saved state')
-    parser.add_argument('--add-subtitles', action='store_true',
-                      help='Add subtitles to the video (default: False)')
-    parser.add_argument('--vertical-position', '-v', type=float, default=0.67,
-                      help='Vertical position ratio for the main subject (default: 0.67 for 2/3 from top)')
-    parser.add_argument('--full-video', '-F', action='store_true',
-                      help='Process the entire video without selecting segments (default: False)')
-    parser.add_argument('--manual-title', '-m', help='Manually specify the video title')
-    parser.add_argument('--language-code', type=str, default='zh',
-                      help='Language code for transcription (default: zh for Chinese)')
-    parser.add_argument('--transcribe-only', action='store_true',
-                      help='Stop after transcription step and exit')
-    
-    args = parser.parse_args()
-    
-    # Ensure default logo directory exists
-    default_logo_dir = os.path.join(os.path.dirname(__file__), 'default_assets')
-    if not os.path.exists(default_logo_dir):
-        os.makedirs(default_logo_dir)
-        logger.info(f"Created default assets directory: {default_logo_dir}")
-    
-    # Check if logo file exists
-    if not os.path.exists(args.logo):
-        logger.warning(f"Logo file not found at {args.logo}")
-        args.logo = None  # Fall back to text if logo file doesn't exist
-    
-    try:
-        if args.input_folder:
-            # Process folder
-            files = find_supported_files(args.input_folder)
-            if not files:
-                logger.error("No supported files found in the specified folder")
-                return
-            
-            # Process each file
-            total_files = len(files)
-            successful = 0
-            failed = 0
-            
-            for i, input_file in enumerate(files, 1):
-                logger.info(f"\nProcessing file {i}/{total_files}: {input_file}")
-                
-                # Process the file (output path will be generated in process_single_file)
-                if process_single_file(input_file, None, args):
-                    successful += 1
-                else:
-                    failed += 1
-            
-            # Print summary
-            logger.info("\nProcessing Summary:")
-            logger.info(f"Total files: {total_files}")
-            logger.info(f"Successful: {successful}")
-            logger.info(f"Failed: {failed}")
-        
-        else:
-            # Process single file
-            process_single_file(args.input_file, args.output, args)
-    
-    except Exception as e:
-        logger.error(f"Error during processing: {e}")
-        raise
-
-if __name__ == "__main__":
-    main() 
+    logger.info("Highlight video creation complete") 
