@@ -37,7 +37,8 @@ def create_highlight_video(
     add_subtitles: bool = False,
     vertical_position_ratio: float = 0.67,
     background_image_path: Optional[str] = None,
-    zoom_factor: float = 2.0
+    zoom_factor: float = 2.0,
+    skip_preview: bool = False
 ):
     """
     Create highlight video in 9:16 format with titles and subtitles, styled like a church service video
@@ -57,36 +58,40 @@ def create_highlight_video(
         background_image_path: Path to background image file (optional)
         zoom_factor: Factor to zoom the video (default: 2.0 for 200% zoom)
     """
-    # Create zoom preview first
-    zoom_preview_path = str(Path(output_path).with_suffix('.zoom_preview.jpg'))
-    preview_timestamp = highlight.start + (highlight.end - highlight.start) / 2  # Use middle frame for preview
-    
-    # Show zoom preview and get confirmation
-    if not create_zoom_preview(
-        input_path=input_path,
-        timestamp=preview_timestamp,
-        zoom_factor=zoom_factor,  # Use parameter instead of fixed value
-        vertical_position_ratio=vertical_position_ratio,
-        output_preview_path=zoom_preview_path
-    ):
-        logger.info("Video creation cancelled by user after zoom preview")
-        return
-    
-    # Create layout preview
-    layout_preview_path = str(Path(output_path).with_suffix('.layout_preview.jpg'))
-    if not create_layout_preview(
-        input_path=input_path,
-        timestamp=preview_timestamp,
-        main_title=highlight.title,
-        output_preview_path=layout_preview_path,
-        logo_path=logo_path,
-        segments=segments,  # This can be None now
-        highlight=highlight,
-        zoom_factor=zoom_factor,
-        vertical_position_ratio=vertical_position_ratio
-    ):
-        logger.info("Video creation cancelled by user after layout preview")
-        return
+    # Create previews only if not skipping
+    if not skip_preview:
+        # Create zoom preview first
+        zoom_preview_path = str(Path(output_path).with_suffix('.zoom_preview.jpg'))
+        preview_timestamp = highlight.start + (highlight.end - highlight.start) / 2  # Use middle frame for preview
+        
+        # Show zoom preview and get confirmation
+        if not create_zoom_preview(
+            input_path=input_path,
+            timestamp=preview_timestamp,
+            zoom_factor=zoom_factor,  # Use parameter instead of fixed value
+            vertical_position_ratio=vertical_position_ratio,
+            output_preview_path=zoom_preview_path
+        ):
+            logger.info("Video creation cancelled by user after zoom preview")
+            return
+        
+        # Create layout preview
+        layout_preview_path = str(Path(output_path).with_suffix('.layout_preview.jpg'))
+        if not create_layout_preview(
+            input_path=input_path,
+            timestamp=preview_timestamp,
+            main_title=highlight.title,
+            output_preview_path=layout_preview_path,
+            logo_path=logo_path,
+            segments=segments,  # This can be None now
+            highlight=highlight,
+            zoom_factor=zoom_factor,
+            vertical_position_ratio=vertical_position_ratio
+        ):
+            logger.info("Video creation cancelled by user after layout preview")
+            return
+    else:
+        logger.info("Skipping preview generation (auto-confirm mode)")
 
     logger.info(f"Creating highlight video from {highlight.start:.2f}s to {highlight.end:.2f}s")
     
