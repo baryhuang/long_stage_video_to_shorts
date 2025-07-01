@@ -257,18 +257,20 @@ def process_segments(
         logger.info(f"\nProcessing segment {i}/{len(valid_segments)}: {title}")
         
         # Create output filename
+        import re
         if args.output_template:
             # Use template with placeholders
+            safe_title = re.sub(r'[^\w\-_]', '_', title)
             output_name = args.output_template.format(
                 index=i,
-                title=title.replace(' ', '_').replace('/', '_'),
+                title=safe_title,
                 start=int(start),
                 end=int(end),
                 timestamp=timestamp
             )
         else:
-            # Default naming
-            safe_title = title.replace(' ', '_').replace('/', '_')[:30]  # Limit length
+            # Default naming with OS-friendly characters
+            safe_title = re.sub(r'[^\w\-_]', '_', title)[:30]  # Replace special chars with underscore
             output_name = f"{input_path.stem}_segment_{i:02d}_{safe_title}_{timestamp}.mp4"
         
         if args.output_dir:
@@ -300,7 +302,10 @@ def process_segments(
                 vertical_position_ratio=args.vertical_position,
                 background_image_path=args.background_image,
                 zoom_factor=args.zoom_factor,
-                skip_preview=args.auto_confirm  # Skip preview if auto_confirm is enabled
+                skip_preview=args.auto_confirm,  # Skip preview if auto_confirm is enabled
+                skip_logo=args.skip_logo,
+                skip_background=args.skip_background,
+                skip_service_info=args.skip_service_info
             )
             
             output_files.append(output_path)
@@ -345,6 +350,12 @@ Output Template Placeholders:
                        help='Path to logo image file')
     parser.add_argument('--background-image', '-b', 
                        help='Path to banner image for video top')
+    parser.add_argument('--skip-logo', action='store_true',
+                       help='Skip logo/church name display (default: False)')
+    parser.add_argument('--skip-background', action='store_true',
+                       help='Skip background/banner image display (default: False)')
+    parser.add_argument('--skip-service-info', action='store_true',
+                       help='Skip service info display (default: False)')
     parser.add_argument('--zoom-factor', '-z', type=float, default=2.0,
                        help='Zoom factor for the video (default: 2.0)')
     parser.add_argument('--vertical-position', '-v', type=float, default=0.67,
@@ -355,6 +366,8 @@ Output Template Placeholders:
                        help='Output path for template file (default: segments_template.json)')
     parser.add_argument('--auto-confirm', '-y', action='store_true',
                        help='Skip preview confirmations and process automatically')
+    parser.add_argument('--manual-title', nargs='+',
+                       help='Manual titles for segments (one title per segment, in order)')
     
     args = parser.parse_args()
     
@@ -380,6 +393,19 @@ Output Template Placeholders:
     if not segments:
         logger.error("No valid segments found")
         sys.exit(1)
+    
+    # Apply manual titles if provided
+    if args.manual_title:
+        if len(args.manual_title) != len(segments):
+            logger.error(f"Number of manual titles ({len(args.manual_title)}) must match number of segments ({len(segments)})")
+            sys.exit(1)
+        
+        # Override titles with manual titles
+        segments = [(start, end, manual_title) for (start, end, _), manual_title in zip(segments, args.manual_title)]
+        logger.info("Applied manual titles to segments:")
+        for i, (start, end, title) in enumerate(segments, 1):
+            duration = end - start
+            logger.info(f"  {i}. {start:.1f}s - {end:.1f}s ({duration:.1f}s): {title}")
     
     # Process segments
     logger.info(f"Processing {len(segments)} segments from video: {args.input_video}")

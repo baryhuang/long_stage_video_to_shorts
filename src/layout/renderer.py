@@ -38,7 +38,10 @@ def create_highlight_video(
     vertical_position_ratio: float = 0.67,
     background_image_path: Optional[str] = None,
     zoom_factor: float = 2.0,
-    skip_preview: bool = False
+    skip_preview: bool = False,
+    skip_logo: bool = False,
+    skip_background: bool = False,
+    skip_service_info: bool = False
 ):
     """
     Create highlight video in 9:16 format with titles and subtitles, styled like a church service video
@@ -57,6 +60,8 @@ def create_highlight_video(
         vertical_position_ratio: Ratio for vertical positioning (default: 0.67 for 2/3 from top)
         background_image_path: Path to background image file (optional)
         zoom_factor: Factor to zoom the video (default: 2.0 for 200% zoom)
+        skip_logo: Skip logo/church name display (default: False)
+        skip_background: Skip background/banner image display (default: False)
     """
     # Create previews only if not skipping
     if not skip_preview:
@@ -86,7 +91,11 @@ def create_highlight_video(
             segments=segments,  # This can be None now
             highlight=highlight,
             zoom_factor=zoom_factor,
-            vertical_position_ratio=vertical_position_ratio
+            vertical_position_ratio=vertical_position_ratio,
+            skip_logo=skip_logo,
+            skip_background=skip_background,
+            skip_service_info=skip_service_info,
+            background_image_path=background_image_path
         ):
             logger.info("Video creation cancelled by user after layout preview")
             return
@@ -201,7 +210,7 @@ def create_highlight_video(
     
     # Add banner image at the top if provided
     banner_clip = None
-    if background_image_path and os.path.exists(background_image_path):
+    if not skip_background and background_image_path and os.path.exists(background_image_path):
         try:
             # Load the banner image
             logger.info(f"Loading banner image from {background_image_path}")
@@ -231,38 +240,53 @@ def create_highlight_video(
         except Exception as e:
             logger.warning(f"Failed to load banner image: {e}")
             banner_height = 0  # Reset if failed
+    elif skip_background:
+        logger.info("Skipping background image as requested")
     
     # Add banner to clips if loaded successfully
     if banner_clip:
         clips_to_combine.append(banner_clip)
     
     # Add logo or church name with increased size
-    if logo_path and os.path.exists(logo_path):
-        try:
-            # Create logo clip
-            logo_clip = ImageClip(logo_path)
-            
-            # Calculate logo size with increased height
-            logo_height = church_name_height
-            logo_width = int(logo_clip.size[0] * (logo_height / logo_clip.size[1]))
-            
-            # Allow logo to be wider, up to 90% of output width
-            max_logo_width = int(output_width * 0.9)
-            if logo_width > max_logo_width:
-                logo_width = max_logo_width
-                logo_height = int(logo_clip.size[1] * (logo_width / logo_clip.size[0]))
-            
-            # Resize and position logo
-            logo_clip = logo_clip.resize(newsize=(logo_width, logo_height))
-            logo_x = (output_width - logo_width) // 2
-            logo_clip = logo_clip.set_position((logo_x, church_name_y))
-            logo_clip = logo_clip.set_duration(video.duration)
-            
-            clips_to_combine.append(logo_clip)
-            logger.info(f"Added logo clip: {logo_width}x{logo_height} at position ({logo_x}, {church_name_y})")
-        except Exception as e:
-            logger.warning(f"Failed to add logo: {e}")
-            # Fallback to text
+    if not skip_logo:
+        if logo_path and os.path.exists(logo_path):
+            try:
+                # Create logo clip
+                logo_clip = ImageClip(logo_path)
+                
+                # Calculate logo size with increased height
+                logo_height = church_name_height
+                logo_width = int(logo_clip.size[0] * (logo_height / logo_clip.size[1]))
+                
+                # Allow logo to be wider, up to 90% of output width
+                max_logo_width = int(output_width * 0.9)
+                if logo_width > max_logo_width:
+                    logo_width = max_logo_width
+                    logo_height = int(logo_clip.size[1] * (logo_width / logo_clip.size[0]))
+                
+                # Resize and position logo
+                logo_clip = logo_clip.resize(newsize=(logo_width, logo_height))
+                logo_x = (output_width - logo_width) // 2
+                logo_clip = logo_clip.set_position((logo_x, church_name_y))
+                logo_clip = logo_clip.set_duration(video.duration)
+                
+                clips_to_combine.append(logo_clip)
+                logger.info(f"Added logo clip: {logo_width}x{logo_height} at position ({logo_x}, {church_name_y})")
+            except Exception as e:
+                logger.warning(f"Failed to add logo: {e}")
+                # Fallback to text
+                church_name_clip = TextClip(
+                    "開路者教會 WAYMAKER CHURCH",
+                    fontsize=50,
+                    color='white',
+                    font=font_path,
+                    size=(output_width - 2*title_margin, church_name_height)
+                ).set_position(('center', church_name_y))
+                church_name_clip = church_name_clip.set_duration(video.duration)
+                clips_to_combine.append(church_name_clip)
+                logger.info("Added church name text clip as fallback")
+        else:
+            # Use text for church name
             church_name_clip = TextClip(
                 "開路者教會 WAYMAKER CHURCH",
                 fontsize=50,
@@ -272,19 +296,9 @@ def create_highlight_video(
             ).set_position(('center', church_name_y))
             church_name_clip = church_name_clip.set_duration(video.duration)
             clips_to_combine.append(church_name_clip)
-            logger.info("Added church name text clip as fallback")
+            logger.info("Added church name text clip")
     else:
-        # Use text for church name
-        church_name_clip = TextClip(
-            "開路者教會 WAYMAKER CHURCH",
-            fontsize=50,
-            color='white',
-            font=font_path,
-            size=(output_width - 2*title_margin, church_name_height)
-        ).set_position(('center', church_name_y))
-        church_name_clip = church_name_clip.set_duration(video.duration)
-        clips_to_combine.append(church_name_clip)
-        logger.info("Added church name text clip")
+        logger.info("Skipping logo/church name as requested")
     
     # Add main title with multi-line support
     title_text = highlight.title
@@ -365,17 +379,20 @@ def create_highlight_video(
         clips_to_combine.append(main_title_clip)
         logger.info(f"Added main title clip: '{title_text}'")
     
-    # Add service info
-    service_info_clip = TextClip(
-        "主日崇拜: 每週日下午2点",
-        fontsize=40,
-        color='white',
-        font=font_path,
-        size=(output_width - 2*title_margin, service_info_height)
-    ).set_position(('center', service_info_y))
-    service_info_clip = service_info_clip.set_duration(video.duration)
-    clips_to_combine.append(service_info_clip)
-    logger.info("Added service info clip")
+    # Add service info (if not skipped)
+    if not skip_service_info:
+        service_info_clip = TextClip(
+            "主日崇拜: 每週日下午2点",
+            fontsize=40,
+            color='white',
+            font=font_path,
+            size=(output_width - 2*title_margin, service_info_height)
+        ).set_position(('center', service_info_y))
+        service_info_clip = service_info_clip.set_duration(video.duration)
+        clips_to_combine.append(service_info_clip)
+        logger.info("Added service info clip")
+    else:
+        logger.info("Skipped service info clip")
     
     # Add subtitles only if requested and segments are available
     if add_subtitles and segments:

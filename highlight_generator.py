@@ -187,7 +187,10 @@ def create_highlight_video(
     add_subtitles: bool = False,
     vertical_position_ratio: float = 0.67,
     background_image_path: Optional[str] = None,
-    zoom_factor: float = 2.0
+    zoom_factor: float = 2.0,
+    skip_logo: bool = False,
+    skip_background: bool = False,
+    skip_service_info: bool = False
 ):
     """
     Create highlight video in 9:16 format with titles and subtitles, styled like a church service video
@@ -233,7 +236,11 @@ def create_highlight_video(
         segments=segments,  # This can be None now
         highlight=highlight,
         zoom_factor=zoom_factor,
-        vertical_position_ratio=vertical_position_ratio
+        vertical_position_ratio=vertical_position_ratio,
+        skip_logo=skip_logo,
+        skip_background=skip_background,
+        skip_service_info=skip_service_info,
+        background_image_path=background_image_path
     ):
         logger.info("Video creation cancelled by user after layout preview")
         return
@@ -511,17 +518,20 @@ def create_highlight_video(
         clips_to_combine.append(main_title_clip)
         logger.info(f"Added main title clip: '{title_text}'")
     
-    # Add service info
-    service_info_clip = TextClip(
-        "主日崇拜: 每週日下午2点",
-        fontsize=40,
-        color='white',
-        font=font_path,
-        size=(output_width - 2*title_margin, service_info_height)
-    ).set_position(('center', service_info_y))
-    service_info_clip = service_info_clip.set_duration(video.duration)
-    clips_to_combine.append(service_info_clip)
-    logger.info("Added service info clip")
+    # Add service info (if not skipped)
+    if not skip_service_info:
+        service_info_clip = TextClip(
+            "主日崇拜: 每週日下午2点",
+            fontsize=40,
+            color='white',
+            font=font_path,
+            size=(output_width - 2*title_margin, service_info_height)
+        ).set_position(('center', service_info_y))
+        service_info_clip = service_info_clip.set_duration(video.duration)
+        clips_to_combine.append(service_info_clip)
+        logger.info("Added service info clip")
+    else:
+        logger.info("Skipped service info clip")
     
     # Add subtitles only if requested and segments are available
     if add_subtitles and segments:
@@ -937,7 +947,10 @@ def process_single_file(
             add_subtitles=args.add_subtitles,
             vertical_position_ratio=args.vertical_position,
             background_image_path=args.background_image,
-            zoom_factor=args.zoom_factor
+            zoom_factor=args.zoom_factor,
+            skip_logo=args.skip_logo,
+            skip_background=args.skip_background,
+            skip_service_info=args.skip_service_info
         )
         
         logger.info(f"Highlight video created successfully: {output_file}")
@@ -961,6 +974,12 @@ def main():
                       help='Path to logo image file (default: default_assets/Waymaker_white_logo_transparent_background.png)')
     parser.add_argument('--background-image', '-b', 
                       help='Path to banner image to display at the top of the video (default: none)')
+    parser.add_argument('--skip-logo', action='store_true',
+                      help='Skip logo/church name display (default: False)')
+    parser.add_argument('--skip-background', action='store_true',
+                      help='Skip background/banner image display (default: False)')
+    parser.add_argument('--skip-service-info', action='store_true',
+                      help='Skip service info display (default: False)')
     parser.add_argument('--zoom-factor', '-z', type=float, default=2.0,
                       help='Zoom factor for the video (default: 2.0 for 200%% zoom)')
     parser.add_argument('--resume-from', '-r', choices=['transcribe', 'segments', 'titles'],

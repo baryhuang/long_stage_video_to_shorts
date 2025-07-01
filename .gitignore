@@ -37,3 +37,5 @@ fonts/
 *.mp3
 
 __pycache__/
+
+.DS_Store

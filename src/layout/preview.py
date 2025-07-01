@@ -31,7 +31,11 @@ def create_layout_preview(
     segments: Optional[List[TranscriptionSegment]] = None,
     highlight: Optional[HighlightClip] = None,
     zoom_factor: float = 2.0,
-    vertical_position_ratio: float = 0.67
+    vertical_position_ratio: float = 0.67,
+    skip_logo: bool = False,
+    skip_background: bool = False,
+    skip_service_info: bool = False,
+    background_image_path: Optional[str] = None
 ) -> bool:
     """
     Create a preview image of the video layout
@@ -46,6 +50,9 @@ def create_layout_preview(
         highlight: HighlightClip object (optional)
         zoom_factor: Factor to zoom the video (default: 2.0)
         vertical_position_ratio: Ratio for vertical positioning (default: 0.67)
+        skip_logo: Skip logo/church name display (default: False)
+        skip_background: Skip background/banner image display (default: False)
+        background_image_path: Path to background image file (optional)
     
     Returns:
         bool: True if user confirms the layout, False otherwise
@@ -157,33 +164,45 @@ def create_layout_preview(
     logger.info(f"- Subtitle position: y={subtitle_y}")
     
     # Add logo for church name
-    if logo_path and os.path.exists(logo_path):
-        try:
-            logo = Image.open(logo_path)
-            # Calculate logo size to fit church name height while maintaining aspect ratio
-            logo_height = church_name_height
-            logo_width = int(logo.width * (logo_height / logo.height))
-            
-            # Allow logo to be wider, up to 90% of output width
-            max_logo_width = int(output_width * 0.9)
-            if logo_width > max_logo_width:
-                logo_width = max_logo_width
-                logo_height = int(logo.height * (logo_width / logo.width))
-            
-            logo_resized = logo.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
-            logger.info(f"Adding logo with dimensions: {logo_width}x{logo_height}")
-            
-            # Calculate position to center the logo
-            logo_x = (output_width - logo_width) // 2
-            logger.info(f"Logo position: x={logo_x}, y={church_name_y}")
-            
-            # Paste logo with alpha channel support
-            preview.paste(logo_resized, (logo_x, church_name_y), logo_resized if logo.mode == 'RGBA' else None)
-        except Exception as e:
-            logger.warning(f"Failed to add logo as church name: {e}")
-            # Fallback to text if logo fails
+    if not skip_logo:
+        if logo_path and os.path.exists(logo_path):
+            try:
+                logo = Image.open(logo_path)
+                # Calculate logo size to fit church name height while maintaining aspect ratio
+                logo_height = church_name_height
+                logo_width = int(logo.width * (logo_height / logo.height))
+                
+                # Allow logo to be wider, up to 90% of output width
+                max_logo_width = int(output_width * 0.9)
+                if logo_width > max_logo_width:
+                    logo_width = max_logo_width
+                    logo_height = int(logo.height * (logo_width / logo.width))
+                
+                logo_resized = logo.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
+                logger.info(f"Adding logo with dimensions: {logo_width}x{logo_height}")
+                
+                # Calculate position to center the logo
+                logo_x = (output_width - logo_width) // 2
+                logger.info(f"Logo position: x={logo_x}, y={church_name_y}")
+                
+                # Paste logo with alpha channel support
+                preview.paste(logo_resized, (logo_x, church_name_y), logo_resized if logo.mode == 'RGBA' else None)
+            except Exception as e:
+                logger.warning(f"Failed to add logo as church name: {e}")
+                # Fallback to text if logo fails
+                church_name = "開路者教會 WAYMAKER CHURCH"
+                logger.info(f"Falling back to text: '{church_name}' at y={church_name_y}")
+                draw.text(
+                    (output_width//2, church_name_y + church_name_height//2),
+                    church_name,
+                    font=church_font,
+                    fill='white',
+                    anchor='mm'
+                )
+        else:
+            # Fallback to text if no logo provided
             church_name = "開路者教會 WAYMAKER CHURCH"
-            logger.info(f"Falling back to text: '{church_name}' at y={church_name_y}")
+            logger.info(f"No logo provided, using text: '{church_name}' at y={church_name_y}")
             draw.text(
                 (output_width//2, church_name_y + church_name_height//2),
                 church_name,
@@ -192,16 +211,7 @@ def create_layout_preview(
                 anchor='mm'
             )
     else:
-        # Fallback to text if no logo provided
-        church_name = "開路者教會 WAYMAKER CHURCH"
-        logger.info(f"No logo provided, using text: '{church_name}' at y={church_name_y}")
-        draw.text(
-            (output_width//2, church_name_y + church_name_height//2),
-            church_name,
-            font=church_font,
-            fill='white',
-            anchor='mm'
-        )
+        logger.info("Skipping logo/church name as requested")
     
     # Draw main title with multi-line support
     logger.info(f"Drawing main title: '{main_title}' at y={main_title_y}")
@@ -270,16 +280,19 @@ def create_layout_preview(
             anchor='mm'
         )
     
-    # Draw service info
-    service_info = "主日崇拜: 每週日下午2点"
-    logger.info(f"Drawing service info: '{service_info}' at y={service_info_y}")
-    draw.text(
-        (output_width//2, service_info_y),
-        service_info,
-        font=service_font,
-        fill='white',
-        anchor='mm'
-    )
+    # Draw service info (if not skipped)
+    if not skip_service_info:
+        service_info = "主日崇拜: 每週日下午2点"
+        logger.info(f"Drawing service info: '{service_info}' at y={service_info_y}")
+        draw.text(
+            (output_width//2, service_info_y),
+            service_info,
+            font=service_font,
+            fill='white',
+            anchor='mm'
+        )
+    else:
+        logger.info("Skipped service info in preview")
     
     # Add first subtitle if segments are provided
     if segments and highlight:

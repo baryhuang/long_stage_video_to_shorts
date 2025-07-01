@@ -44,7 +44,10 @@ python highlight_generator.py --input-file video.mp4 \
     --zoom-factor 2.5 \
     --vertical-position 0.67 \
     --add-subtitles \
-    --manual-title "Custom Title"
+    --manual-title "Custom Title" \
+    --skip-logo \
+    --skip-background \
+    --skip-service-info
 ```
 
 ### Resume Processing
@@ -71,7 +74,10 @@ python create_segment_highlights.py video.mp4 "10-30,45-75" \
     --output-dir ./highlights \
     --output-template "highlight_{index}_{title}_{timestamp}.mp4" \
     --zoom-factor 2.5 \
-    --vertical-position 0.67
+    --vertical-position 0.67 \
+    --skip-logo \
+    --skip-background \
+    --skip-service-info
 
 # Create JSON template for segments
 python create_segment_highlights.py --create-template --template-output my_segments.json
