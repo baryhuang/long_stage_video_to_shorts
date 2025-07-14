@@ -28,6 +28,7 @@ export interface UploadState {
     message: string;
     transcript: string | null;
     error: string | null;
+    highlights: Highlight[] | null;
   };
 }
 

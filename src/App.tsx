@@ -20,7 +20,8 @@ const App: React.FC = () => {
       progress: 0,
       message: '',
       transcript: null,
-      error: null
+      error: null,
+      highlights: null
     }
   });
 
@@ -201,6 +202,8 @@ const App: React.FC = () => {
           transcriptionState={uploadState.transcription}
           onTranscriptionUpdate={handleTranscriptionUpdate}
           onToast={addToast}
+          onPlaySegment={handlePlaySegment}
+          onExportHighlight={handleExportHighlight}
         />
 
         {/* 高亮摘要列表區域 */}

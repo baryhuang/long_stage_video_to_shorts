@@ -838,8 +838,11 @@ def process_single_file(
                 # If using transcribe_only mode, create text transcript file
                 if args.transcribe_only:
                     transcript_txt_path = Path(input_file).with_suffix('.transcript.txt')
-                    if not transcript_txt_path.exists():
-                        logger.info("Creating plain text transcript file from loaded state...")
+                    if not transcript_txt_path.exists() or args.force_overwrite:
+                        if args.force_overwrite and transcript_txt_path.exists():
+                            logger.info("Force overwrite enabled - recreating plain text transcript file...")
+                        else:
+                            logger.info("Creating plain text transcript file from loaded state...")
                         create_text_transcript(input_file, segments)
                     logger.info("Transcription data loaded. Exiting as --transcribe-only flag was set.")
                     return True
@@ -852,14 +855,17 @@ def process_single_file(
                     return False
         else:
             logger.info("Generating transcription...")
-            segments = transcribe_video(input_file, args.language_code)
+            segments = transcribe_video(input_file, args.language_code, args.force_overwrite)
             
             # If transcribe_only flag is set, exit after transcription
             if args.transcribe_only:
-                # Create plain text transcript file if it doesn't exist
+                # Create plain text transcript file if it doesn't exist or force overwrite
                 transcript_txt_path = Path(input_file).with_suffix('.transcript.txt')
-                if not transcript_txt_path.exists():
-                    logger.info("Creating plain text transcript file...")
+                if not transcript_txt_path.exists() or args.force_overwrite:
+                    if args.force_overwrite and transcript_txt_path.exists():
+                        logger.info("Force overwrite enabled - recreating plain text transcript file...")
+                    else:
+                        logger.info("Creating plain text transcript file...")
                     create_text_transcript(input_file, segments)
                 
                 logger.info("Transcription completed.")
@@ -995,6 +1001,8 @@ def main():
                       help='Language code for transcription (default: zh for Chinese)')
     parser.add_argument('--transcribe-only', action='store_true',
                       help='Stop after transcription step and exit')
+    parser.add_argument('--force-overwrite', action='store_true',
+                      help='Force overwrite existing transcript files (default: False)')
     
     args = parser.parse_args()
     

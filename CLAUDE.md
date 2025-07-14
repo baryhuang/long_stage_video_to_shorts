@@ -34,6 +34,9 @@ python highlight_generator.py --input-folder /path/to/videos/
 # Transcribe only (useful for audio files)
 python highlight_generator.py --input-file audio.mp3 --transcribe-only
 
+# Force overwrite existing transcript files (.json and .txt)
+python highlight_generator.py --input-file video.mp4 --transcribe-only --force-overwrite
+
 # Full video processing (skip segment selection)
 python highlight_generator.py --input-file video.mp4 --full-video
 

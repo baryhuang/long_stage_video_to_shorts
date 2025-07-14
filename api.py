@@ -12,6 +12,7 @@ import traceback
 import subprocess
 import threading
 import boto3
+import google.generativeai as genai
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -21,6 +22,11 @@ from dotenv import load_dotenv
 
 # 載入環境變量
 load_dotenv()
+
+# 配置 Gemini API
+GOOGLE_API_KEY = os.getenv('GOOGLE_API_KEY')
+if GOOGLE_API_KEY:
+    genai.configure(api_key=GOOGLE_API_KEY)
 
 app = Flask(__name__)
 CORS(app)  # 允許跨域請求
@@ -171,6 +177,146 @@ def set_highlights_path():
         traceback.print_exc()
         return jsonify({'error': f'設置失敗: {str(e)}'}), 500
 
+def generate_highlights_with_gemini(transcript_json_file, transcript_text):
+    """使用 Gemini Pro 2.5 分析轉錄內容並生成精華片段"""
+    try:
+        if not GOOGLE_API_KEY:
+            print("未設置 Google API Key，跳過精華片段生成")
+            return None
+            
+        # 確保 JSON 轉錄文件存在
+        if not os.path.exists(transcript_json_file):
+            print(f"轉錄 JSON 文件不存在: {transcript_json_file}")
+            return None
+        
+        # 導入 Google Generative AI library
+        from google import genai
+        from google.genai import types
+        
+        # 初始化 Gemini client
+        client = genai.Client(api_key=GOOGLE_API_KEY)
+        
+        # 定義 JSON schema 用於結構化輸出
+        json_schema = {
+            "name": "extract_highlights",
+            "description": "從教會講道視頻轉錄中提取精華片段",
+            "parameters": {
+                "type": "OBJECT",
+                "properties": {
+                    "highlights": {
+                        "type": "ARRAY",
+                        "description": "精華片段列表",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "start": {
+                                    "type": "NUMBER",
+                                    "description": "片段開始時間(秒)"
+                                },
+                                "end": {
+                                    "type": "NUMBER",
+                                    "description": "片段結束時間(秒)"
+                                },
+                                "title": {
+                                    "type": "STRING",
+                                    "description": "片段標題(繁體中文)"
+                                },
+                                "content": {
+                                    "type": "STRING",
+                                    "description": "片段內容摘要"
+                                },
+                                "score": {
+                                    "type": "NUMBER",
+                                    "description": "評分(0-100)"
+                                },
+                                "reason": {
+                                    "type": "STRING",
+                                    "description": "選擇理由"
+                                }
+                            },
+                            "required": ["start", "end", "title", "content", "score", "reason"]
+                        }
+                    }
+                },
+                "required": ["highlights"]
+            }
+        }
+        
+        # 構建提示詞
+        prompt = f"""
+你是一個專業的教會事工視頻編輯助手。請分析以下講道/教會視頻的轉錄內容，找出3-5個最精華的片段。
+
+轉錄內容：
+{transcript_text}
+
+選擇標準：
+1. 包含重要的神學概念或教義
+2. 有感人的見證或故事
+3. 實用的生活應用建議
+4. 強有力的金句或重點
+5. 會眾回應熱烈的部分
+
+每個片段應該：
+- 長度在30秒到2分鐘之間
+- 有完整的思想表達
+- 適合單獨分享
+- 標題要吸引人且准確
+
+請使用提供的函數回傳結構化的精華片段數據。
+"""
+        
+        # 配置工具
+        tools = types.Tool(function_declarations=[json_schema])
+        config = types.GenerateContentConfig(
+            temperature=0.4,
+            tools=[tools]
+        )
+        
+        # 發送請求
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-exp",
+            contents=[prompt],
+            config=config
+        )
+        
+        # 解析回應
+        if not response.candidates:
+            print("Gemini 沒有返回候選回應")
+            return None
+            
+        candidate = response.candidates[0]
+        if (candidate.content and
+            candidate.content.parts and
+            len(candidate.content.parts) > 0 and
+            candidate.content.parts[0].function_call):
+            
+            function_call = candidate.content.parts[0].function_call
+            
+            # 如果 args 已經是 dict，直接使用
+            if isinstance(function_call.args, dict):
+                highlights_data = function_call.args
+            else:
+                highlights_data = json.loads(function_call.args)
+            
+            # 保存到文件
+            highlights_file = transcript_json_file.replace('.transcript.json', '.highlights.json')
+            with open(highlights_file, 'w', encoding='utf-8') as f:
+                json.dump(highlights_data, f, ensure_ascii=False, indent=2)
+            
+            print(f"精華片段已保存到: {highlights_file}")
+            return highlights_data
+            
+        else:
+            print("Gemini 沒有返回函數調用")
+            if candidate.content and candidate.content.parts:
+                print(f"回應內容: {response.text}")
+            return None
+            
+    except Exception as e:
+        print(f"生成精華片段時發生錯誤: {str(e)}")
+        traceback.print_exc()
+        return None
+
 @app.route('/api/list-s3-videos', methods=['GET'])
 def list_s3_videos():
     """列出 S3 bucket 中的視頻文件"""
@@ -232,7 +378,33 @@ def download_s3_video():
         os.makedirs(downloads_dir, exist_ok=True)
         local_path = os.path.join(downloads_dir, local_filename)
         
+        # 檢查文件是否已存在
+        if os.path.exists(local_path):
+            # 獲取本地文件和 S3 文件的大小和修改時間進行比較
+            try:
+                local_size = os.path.getsize(local_path)
+                local_mtime = os.path.getmtime(local_path)
+                
+                s3_response = s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=s3_key)
+                s3_size = s3_response['ContentLength']
+                s3_mtime = s3_response['LastModified'].timestamp()
+                
+                # 如果大小相同且本地文件不是更舊的，跳過下載
+                if local_size == s3_size and local_mtime >= s3_mtime:
+                    print(f"文件已存在且為最新版本，跳過下載: {local_filename}")
+                    return jsonify({
+                        'success': True,
+                        'local_path': local_path,
+                        'filename': local_filename,
+                        'message': f'文件已存在且為最新版本，無需下載: {local_filename}'
+                    })
+                else:
+                    print(f"文件已存在但需要更新，重新下載: {local_filename}")
+            except Exception as e:
+                print(f"檢查文件狀態時發生錯誤: {e}，重新下載")
+        
         # 從 S3 下載文件
+        print(f"正在從 S3 下載文件: {s3_key} -> {local_path}")
         s3_client.download_file(S3_BUCKET_NAME, s3_key, local_path)
         
         return jsonify({
@@ -250,9 +422,29 @@ def download_s3_video():
         traceback.print_exc()
         return jsonify({'error': f'下載失敗: {str(e)}'}), 500
 
-def run_transcription(video_path, language_code, task_id):
+def run_transcription(video_path, language_code, task_id, force_overwrite=False):
     """在後台運行轉錄任務"""
     try:
+        # 檢查是否已有轉錄文件
+        transcript_file = video_path.replace('.MP4', '.transcript.txt').replace('.mp4', '.transcript.txt')
+        transcript_json_file = video_path.replace('.MP4', '.transcript.json').replace('.mp4', '.transcript.json')
+        
+        if not force_overwrite and os.path.exists(transcript_file) and os.path.exists(transcript_json_file):
+            # 讀取現有的轉錄文件
+            with open(transcript_file, 'r', encoding='utf-8') as f:
+                existing_transcript = f.read()
+            
+            transcription_tasks[task_id] = {
+                'status': 'completed',
+                'progress': 100,
+                'message': '使用現有轉錄文件',
+                'transcript': existing_transcript,
+                'error': None,
+                'highlights': None
+            }
+            print(f"使用現有轉錄文件: {transcript_file}")
+            return
+        
         # 更新任務狀態
         transcription_tasks[task_id] = {
             'status': 'running',
@@ -275,6 +467,10 @@ def run_transcription(video_path, language_code, task_id):
             '--language-code', language_code
         ]
         
+        # 如果需要強制覆蓋，添加參數
+        if force_overwrite:
+            cmd.append('--force-overwrite')
+        
         print(f"執行轉錄命令: {' '.join(cmd)}")
         print(f"視頻路徑: {video_path}")
         print(f"語言代碼: {language_code}")
@@ -290,17 +486,20 @@ def run_transcription(video_path, language_code, task_id):
         if result.returncode == 0:
             # 轉錄成功，讀取結果
             transcript_file = video_path.replace('.MP4', '.transcript.txt').replace('.mp4', '.transcript.txt')
+            transcript_json_file = video_path.replace('.MP4', '.transcript.json').replace('.mp4', '.transcript.json')
             
             if os.path.exists(transcript_file):
                 with open(transcript_file, 'r', encoding='utf-8') as f:
                     transcript_content = f.read()
                 
+                # 轉錄完成，不自動生成精華片段
                 transcription_tasks[task_id] = {
                     'status': 'completed',
                     'progress': 100,
                     'message': '轉錄完成',
                     'transcript': transcript_content,
-                    'error': None
+                    'error': None,
+                    'highlights': None
                 }
             else:
                 transcription_tasks[task_id] = {
@@ -308,7 +507,8 @@ def run_transcription(video_path, language_code, task_id):
                     'progress': 0,
                     'message': '轉錄文件未找到',
                     'transcript': None,
-                    'error': '轉錄文件未找到'
+                    'error': '轉錄文件未找到',
+                    'highlights': None
                 }
         else:
             # 轉錄失敗
@@ -342,10 +542,12 @@ def start_transcription():
         
         video_path = data['video_path']
         language_code = data.get('language_code', 'en')
+        force_overwrite = data.get('force_overwrite', False)
         
         print(f"收到轉錄請求:")
         print(f"  視頻路徑: {video_path}")
         print(f"  語言代碼: {language_code}")
+        print(f"  強制覆蓋: {force_overwrite}")
         
         # 檢查文件是否存在
         if not os.path.exists(video_path):
@@ -361,7 +563,7 @@ def start_transcription():
         # 在後台啟動轉錄任務
         thread = threading.Thread(
             target=run_transcription,
-            args=(video_path, language_code, task_id)
+            args=(video_path, language_code, task_id, force_overwrite)
         )
         thread.daemon = True
         thread.start()
@@ -377,6 +579,48 @@ def start_transcription():
         traceback.print_exc()
         return jsonify({'error': f'啟動失敗: {str(e)}'}), 500
 
+@app.route('/api/generate-highlights', methods=['POST'])
+def generate_highlights():
+    """手動生成精華片段"""
+    try:
+        data = request.get_json()
+        if not data or 'video_path' not in data:
+            return jsonify({'error': '沒有提供視頻路徑'}), 400
+        
+        video_path = data['video_path']
+        
+        # 構建轉錄文件路徑
+        transcript_file = video_path.replace('.MP4', '.transcript.txt').replace('.mp4', '.transcript.txt')
+        transcript_json_file = video_path.replace('.MP4', '.transcript.json').replace('.mp4', '.transcript.json')
+        
+        # 檢查轉錄文件是否存在
+        if not os.path.exists(transcript_file):
+            return jsonify({'error': '轉錄文件不存在，請先完成轉錄'}), 400
+        
+        # 讀取轉錄內容
+        with open(transcript_file, 'r', encoding='utf-8') as f:
+            transcript_content = f.read()
+        
+        # 生成精華片段
+        highlights = generate_highlights_with_gemini(transcript_json_file, transcript_content)
+        
+        if highlights:
+            # 確保回傳的格式正確
+            highlights_list = highlights.get('highlights', []) if isinstance(highlights, dict) else highlights
+            
+            return jsonify({
+                'success': True,
+                'highlights': highlights_list,
+                'message': f'成功生成 {len(highlights_list)} 個精華片段'
+            })
+        else:
+            return jsonify({'error': '精華片段生成失敗，請檢查 Google API Key 設置'}), 500
+        
+    except Exception as e:
+        print(f"生成精華片段錯誤: {str(e)}")
+        traceback.print_exc()
+        return jsonify({'error': f'生成失敗: {str(e)}'}), 500
+
 @app.route('/api/transcription-status/<task_id>', methods=['GET'])
 def get_transcription_status(task_id):
     """獲取轉錄任務狀態"""
@@ -391,7 +635,8 @@ def get_transcription_status(task_id):
             'progress': task['progress'],
             'message': task['message'],
             'transcript': task['transcript'],
-            'error': task['error']
+            'error': task['error'],
+            'highlights': task.get('highlights', None)
         })
         
     except Exception as e:

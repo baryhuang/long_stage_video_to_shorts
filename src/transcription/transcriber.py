@@ -22,16 +22,17 @@ from src.models.transcription import TranscriptionSegment
 
 logger = logging.getLogger(__name__)
 
-def transcribe_video(video_path: str, language_code: str = "zh") -> List[TranscriptionSegment]:
+def transcribe_video(video_path: str, language_code: str = "zh", force_overwrite: bool = False) -> List[TranscriptionSegment]:
     """
     Transcribe the video or audio file using AssemblyAI and return segments with timing information.
     First extracts audio from video if needed, then transcribes the audio.
     Uses word-level timestamps for more precise timing information.
-    If a transcript file already exists, load it instead of re-transcribing.
+    If a transcript file already exists, load it instead of re-transcribing (unless force_overwrite is True).
     
     Args:
         video_path: Path to the video or audio file
         language_code: Language code (zh for Traditional Chinese)
+        force_overwrite: If True, overwrite existing transcript files
     
     Returns:
         List of TranscriptionSegment objects
@@ -40,8 +41,8 @@ def transcribe_video(video_path: str, language_code: str = "zh") -> List[Transcr
     video_path_obj = Path(video_path)
     transcript_path = video_path_obj.with_suffix('.transcript.json')
     
-    # Check if transcript file exists
-    if transcript_path.exists():
+    # Check if transcript file exists and we're not forcing overwrite
+    if transcript_path.exists() and not force_overwrite:
         logger.info(f"Loading existing transcript from {transcript_path}")
         try:
             with open(transcript_path, 'r', encoding='utf-8') as f:
@@ -61,6 +62,10 @@ def transcribe_video(video_path: str, language_code: str = "zh") -> List[Transcr
             return segments
         except Exception as e:
             logger.warning(f"Failed to load existing transcript: {e}. Will re-transcribe.")
+    
+    # Log if we're forcing overwrite
+    if force_overwrite and transcript_path.exists():
+        logger.info(f"Force overwrite enabled - existing transcript will be replaced")
     
     logger.info(f"Processing file: {video_path}")
     

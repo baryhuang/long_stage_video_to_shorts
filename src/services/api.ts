@@ -87,7 +87,7 @@ export const exportAll = async (highlights: Highlight[]): Promise<Blob> => {
   return response.blob();
 };
 
-export const startTranscription = async (videoPath: string, languageCode: string = 'en'): Promise<{
+export const startTranscription = async (videoPath: string, languageCode: string = 'en', forceOverwrite: boolean = false): Promise<{
   task_id: string;
   message: string;
 }> => {
@@ -98,7 +98,8 @@ export const startTranscription = async (videoPath: string, languageCode: string
     },
     body: JSON.stringify({ 
       video_path: videoPath,
-      language_code: languageCode 
+      language_code: languageCode,
+      force_overwrite: forceOverwrite
     }),
   });
 
@@ -117,6 +118,7 @@ export const getTranscriptionStatus = async (taskId: string): Promise<{
   message: string;
   transcript: string | null;
   error: string | null;
+  highlights: any[] | null;
 }> => {
   const response = await fetch(`${API_BASE}/transcription-status/${taskId}`);
 
@@ -166,6 +168,27 @@ export const downloadS3Video = async (key: string): Promise<{
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.error || '下載 S3 視頻失敗');
+  }
+
+  return response.json();
+};
+
+export const generateHighlights = async (videoPath: string): Promise<{
+  success: boolean;
+  highlights: any[];
+  message: string;
+}> => {
+  const response = await fetch(`${API_BASE}/generate-highlights`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ video_path: videoPath }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || '生成精華片段失敗');
   }
 
   return response.json();
