@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>教會事工 AI 高亮摘要工具</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', 'Noto Sans TC', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: #FFFFFF;
+            color: #111827;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 768px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .header {
+            text-align: center;
+            padding: 24px 0;
+            border-bottom: 1px solid #E5E7EB;
+            margin-bottom: 24px;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .upload-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .upload-button {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            border: 2px dashed #E5E7EB;
+            border-radius: 8px;
+            background-color: #F9FAFB;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-height: 120px;
+        }
+
+        .upload-button:hover {
+            border-color: #3B82F6;
+            background-color: #EFF6FF;
+        }
+
+        .upload-button.active {
+            border-color: #10B981;
+            background-color: #ECFDF5;
+        }
+
+        .upload-button span {
+            font-size: 16px;
+            color: #6B7280;
+            margin-top: 8px;
+        }
+
+        .upload-button.active span {
+            color: #10B981;
+        }
+
+        .upload-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+
+        .video-section {
+            margin-bottom: 24px;
+            padding: 16px;
+            background-color: #F9FAFB;
+            border-radius: 8px;
+            border: 1px solid #E5E7EB;
+            display: none;
+        }
+
+        .video-player {
+            width: 100%;
+            max-height: 400px;
+            border-radius: 8px;
+        }
+
+        .highlights-section {
+            display: none;
+        }
+
+        .highlights-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .highlights-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #111827;
+        }
+
+        .export-all-btn {
+            background-color: #3B82F6;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s ease;
+        }
+
+        .export-all-btn:hover {
+            background-color: #2563EB;
+        }
+
+        .highlight-card {
+            background-color: #F9FAFB;
+            border: 1px solid #E5E7EB;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+
+        .highlight-time {
+            font-size: 14px;
+            color: #6B7280;
+            margin-bottom: 8px;
+        }
+
+        .highlight-title {
+            font-size: 16px;
+            font-weight: 500;
+            color: #111827;
+            margin-bottom: 12px;
+        }
+
+        .highlight-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .play-btn, .export-btn {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s ease;
+        }
+
+        .play-btn {
+            background-color: #3B82F6;
+            color: white;
+        }
+
+        .play-btn:hover {
+            background-color: #2563EB;
+        }
+
+        .export-btn {
+            background-color: white;
+            color: #6B7280;
+            border: 1px solid #E5E7EB;
+        }
+
+        .export-btn:hover {
+            background-color: #F9FAFB;
+            color: #374151;
+        }
+
+        .message {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 14px;
+        }
+
+        .message.success {
+            background-color: #ECFDF5;
+            color: #065F46;
+            border: 1px solid #A7F3D0;
+        }
+
+        .message.error {
+            background-color: #FEF2F2;
+            color: #991B1B;
+            border: 1px solid #FECACA;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        @media (max-width: 640px) {
+            .upload-section {
+                grid-template-columns: 1fr;
+            }
+            
+            .highlights-header {
+                flex-direction: column;
+                gap: 12px;
+                align-items: stretch;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>✝️ 教會事工 AI 高亮摘要工具</h1>
+        </div>
+
+        <div id="messageArea"></div>
+
+        <div class="upload-section">
+            <div class="upload-button" id="videoUpload">
+                <div class="upload-icon">🎬</div>
+                <span>上傳視頻</span>
+                <input type="file" id="videoFile" accept=".mp4,.avi,.mov,.mkv,.webm">
+            </div>
+            
+            <div class="upload-button" id="highlightsUpload">
+                <div class="upload-icon">📝</div>
+                <span>上傳 Highlights JSON</span>
+                <input type="file" id="highlightsFile" accept=".json">
+            </div>
+        </div>
+
+        <div class="video-section" id="videoSection">
+            <video class="video-player" id="videoPlayer" controls>
+                您的瀏覽器不支援視頻播放
+            </video>
+        </div>
+
+        <div class="highlights-section" id="highlightsSection">
+            <div class="highlights-header">
+                <h2 class="highlights-title">🔦 高亮摘要片段</h2>
+                <button class="export-all-btn" id="exportAllBtn">📤 導出全部摘要</button>
+            </div>
+            <div id="highlightsList"></div>
+        </div>
+    </div>
+
+    <script>
+        let currentVideo = null;
+        let currentHighlights = [];
+
+        // 初始化事件監聽
+        document.addEventListener('DOMContentLoaded', function() {
+            // 視頻上傳
+            document.getElementById('videoUpload').addEventListener('click', function() {
+                document.getElementById('videoFile').click();
+            });
+
+            document.getElementById('videoFile').addEventListener('change', handleVideoUpload);
+
+            // JSON 上傳
+            document.getElementById('highlightsUpload').addEventListener('click', function() {
+                document.getElementById('highlightsFile').click();
+            });
+
+            document.getElementById('highlightsFile').addEventListener('change', handleHighlightsUpload);
+
+            // 導出全部
+            document.getElementById('exportAllBtn').addEventListener('click', exportAllHighlights);
+        });
+
+        function showMessage(text, type = 'success') {
+            const messageArea = document.getElementById('messageArea');
+            const message = document.createElement('div');
+            message.className = `message ${type}`;
+            message.textContent = text;
+            messageArea.appendChild(message);
+
+            setTimeout(() => {
+                message.remove();
+            }, 5000);
+        }
+
+        function handleVideoUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('video', file);
+
+            fetch('/upload-video', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    currentVideo = data.filename;
+                    document.getElementById('videoUpload').classList.add('active');
+                    document.getElementById('videoUpload').querySelector('span').textContent = '✓ 視頻已上傳';
+                    
+                    // 設置視頻播放器
+                    const videoPlayer = document.getElementById('videoPlayer');
+                    videoPlayer.src = `/video/${data.filename}`;
+                    document.getElementById('videoSection').style.display = 'block';
+                    
+                    showMessage(data.message);
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showMessage('上傳失敗: ' + error.message, 'error');
+            });
+        }
+
+        function handleHighlightsUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('highlights', file);
+
+            fetch('/upload-highlights', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    currentHighlights = data.highlights;
+                    document.getElementById('highlightsUpload').classList.add('active');
+                    document.getElementById('highlightsUpload').querySelector('span').textContent = '✓ JSON 已上傳';
+                    
+                    renderHighlights(data.highlights);
+                    document.getElementById('highlightsSection').style.display = 'block';
+                    
+                    showMessage(data.message);
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showMessage('上傳失敗: ' + error.message, 'error');
+            });
+        }
+
+        function renderHighlights(highlights) {
+            const highlightsList = document.getElementById('highlightsList');
+            highlightsList.innerHTML = '';
+
+            highlights.forEach((highlight, index) => {
+                const card = document.createElement('div');
+                card.className = 'highlight-card';
+
+                const startTime = formatTime(highlight.start);
+                const endTime = formatTime(highlight.end);
+                const duration = Math.round(highlight.end - highlight.start);
+
+                card.innerHTML = `
+                    <div class="highlight-time">${startTime} - ${endTime} (${duration}秒)</div>
+                    <div class="highlight-title">✨ ${highlight.title}</div>
+                    <div class="highlight-actions">
+                        <button class="play-btn" onclick="playSegment(${highlight.start}, ${highlight.end})">
+                            ▶️ 播放片段
+                        </button>
+                        <button class="export-btn" onclick="exportHighlight(${index})">
+                            📄 導出文字
+                        </button>
+                    </div>
+                `;
+
+                highlightsList.appendChild(card);
+            });
+        }
+
+        function formatTime(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        function playSegment(start, end) {
+            const videoPlayer = document.getElementById('videoPlayer');
+            if (!videoPlayer.src) {
+                showMessage('請先上傳視頻文件', 'error');
+                return;
+            }
+
+            videoPlayer.currentTime = start;
+            videoPlayer.play();
+
+            // 設置結束時間監聽（可選）
+            const handleTimeUpdate = () => {
+                if (videoPlayer.currentTime >= end) {
+                    videoPlayer.pause();
+                    videoPlayer.removeEventListener('timeupdate', handleTimeUpdate);
+                }
+            };
+            
+            videoPlayer.addEventListener('timeupdate', handleTimeUpdate);
+        }
+
+        function exportHighlight(index) {
+            const highlight = currentHighlights[index];
+            const data = {
+                ...highlight,
+                timestamp: new Date().toLocaleString('zh-TW')
+            };
+
+            fetch('/export-highlight', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.blob();
+                }
+                throw new Error('導出失敗');
+            })
+            .then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `highlight_${formatTime(highlight.start).replace(':', '_')}-${formatTime(highlight.end).replace(':', '_')}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                showMessage('摘要已導出');
+            })
+            .catch(error => {
+                showMessage('導出失敗: ' + error.message, 'error');
+            });
+        }
+
+        function exportAllHighlights() {
+            if (currentHighlights.length === 0) {
+                showMessage('沒有可導出的摘要', 'error');
+                return;
+            }
+
+            const data = {
+                highlights: currentHighlights,
+                timestamp: new Date().toLocaleString('zh-TW')
+            };
+
+            fetch('/export-all', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => {
+                if (response.ok) {
+                    return response.blob();
+                }
+                throw new Error('導出失敗');
+            })
+            .then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `all_highlights_${currentHighlights.length}_segments.txt`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                document.body.removeChild(a);
+                
+                showMessage(`所有 ${currentHighlights.length} 個摘要已導出`);
+            })
+            .catch(error => {
+                showMessage('導出失敗: ' + error.message, 'error');
+            });
+        }
+    </script>
+</body>
+</html>

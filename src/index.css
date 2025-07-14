@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 按照 UX 需求文檔 v1.1 的字體設定 */
+@layer base {
+  body {
+    font-family: 'Inter', 'Noto Sans TC', system-ui, sans-serif;
+    font-size: 16px; /* text-base */
+    line-height: 1.6;
+  }
+}
+
+/* 自定義動畫 */
+@layer utilities {
+  .animate-in {
+    animation: slideInFromTop 0.3s ease-out;
+  }
+  
+  .slide-in-from-top-2 {
+    transform: translateY(-8px);
+  }
+  
+  @keyframes slideInFromTop {
+    from {
+      opacity: 0;
+      transform: translateY(-8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+}

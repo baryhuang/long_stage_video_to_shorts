@@ -39,3 +39,14 @@ fonts/
 __pycache__/
 
 .DS_Store
+
+node_modules/
+
+# 下載目錄
+downloads/
+uploads/
+
+# 生成的轉錄和狀態文件
+*.transcript.txt
+*.transcript.json
+*.state.json
