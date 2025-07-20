@@ -33,6 +33,8 @@ CORS(app)  # 允許跨域請求
 
 # 配置
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'avi', 'mov', 'mkv', 'webm'}
+ALLOWED_AUDIO_EXTENSIONS = {'mp3', 'wav', 'm4a', 'aac', 'ogg'}
+ALLOWED_MEDIA_EXTENSIONS = ALLOWED_VIDEO_EXTENSIONS | ALLOWED_AUDIO_EXTENSIONS
 ALLOWED_JSON_EXTENSIONS = {'json'}
 
 # S3 配置
@@ -124,8 +126,9 @@ def set_video_path():
         
         # 檢查文件格式
         file_extension = os.path.splitext(video_path)[1].lower()
-        if file_extension not in ['.mp4', '.avi', '.mov', '.mkv', '.webm']:
-            return jsonify({'error': '不支援的視頻格式'}), 400
+        allowed_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.mp3', '.wav', '.m4a', '.aac', '.ogg']
+        if file_extension not in allowed_extensions:
+            return jsonify({'error': '不支援的媒體格式'}), 400
         
         # 獲取文件名
         filename = os.path.basename(video_path)
@@ -319,7 +322,7 @@ def generate_highlights_with_gemini(transcript_json_file, transcript_text):
 
 @app.route('/api/list-s3-videos', methods=['GET'])
 def list_s3_videos():
-    """列出 S3 bucket 中的視頻文件"""
+    """列出 S3 bucket 中的視頻和音頻文件"""
     try:
         if s3_client is None:
             return jsonify({'error': 'S3 客戶端未初始化，請檢查 AWS 憑證'}), 500
@@ -332,8 +335,8 @@ def list_s3_videos():
                 key = obj['Key']
                 file_extension = key.split('.')[-1].lower()
                 
-                # 只包含視頻文件
-                if file_extension in ALLOWED_VIDEO_EXTENSIONS:
+                # 包含視頻和音頻文件
+                if file_extension in ALLOWED_MEDIA_EXTENSIONS:
                     videos.append({
                         'key': key,
                         'name': key.split('/')[-1],  # 只顯示文件名
@@ -425,9 +428,11 @@ def download_s3_video():
 def run_transcription(video_path, language_code, task_id, force_overwrite=False):
     """在後台運行轉錄任務"""
     try:
-        # 檢查是否已有轉錄文件
-        transcript_file = video_path.replace('.MP4', '.transcript.txt').replace('.mp4', '.transcript.txt')
-        transcript_json_file = video_path.replace('.MP4', '.transcript.json').replace('.mp4', '.transcript.json')
+        # 檢查是否已有轉錄文件 - 支援所有媒體格式
+        import os
+        base_path = os.path.splitext(video_path)[0]  # 移除任何擴展名
+        transcript_file = f"{base_path}.transcript.txt"
+        transcript_json_file = f"{base_path}.transcript.json"
         
         if not force_overwrite and os.path.exists(transcript_file) and os.path.exists(transcript_json_file):
             # 讀取現有的轉錄文件
@@ -489,8 +494,22 @@ def run_transcription(video_path, language_code, task_id, force_overwrite=False)
             transcript_json_file = video_path.replace('.MP4', '.transcript.json').replace('.mp4', '.transcript.json')
             
             if os.path.exists(transcript_file):
-                with open(transcript_file, 'r', encoding='utf-8') as f:
-                    transcript_content = f.read()
+                try:
+                    with open(transcript_file, 'r', encoding='utf-8') as f:
+                        transcript_content = f.read()
+                except UnicodeDecodeError:
+                    # Try with different encodings if UTF-8 fails
+                    try:
+                        with open(transcript_file, 'r', encoding='utf-8-sig') as f:
+                            transcript_content = f.read()
+                    except UnicodeDecodeError:
+                        try:
+                            with open(transcript_file, 'r', encoding='gbk') as f:
+                                transcript_content = f.read()
+                        except UnicodeDecodeError:
+                            with open(transcript_file, 'rb') as f:
+                                raw_data = f.read()
+                                transcript_content = raw_data.decode('utf-8', errors='replace')
                 
                 # 轉錄完成，不自動生成精華片段
                 transcription_tasks[task_id] = {

@@ -98,6 +98,11 @@
             border-radius: 8px;
         }
 
+        .audio-player {
+            width: 100%;
+            border-radius: 8px;
+        }
+
         .highlights-section {
             display: none;
         }
@@ -136,6 +141,73 @@
             border-radius: 8px;
             padding: 16px;
             margin-bottom: 16px;
+        }
+
+        .highlight-card.expanded {
+            background-color: #EFF6FF;
+            border-color: #3B82F6;
+        }
+
+        .time-controls {
+            display: none;
+            margin: 12px 0;
+            padding: 12px;
+            background-color: #F3F4F6;
+            border-radius: 6px;
+            border: 1px solid #D1D5DB;
+        }
+
+        .time-controls.show {
+            display: block;
+        }
+
+        .time-input-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 8px 0;
+        }
+
+        .time-input {
+            width: 80px;
+            padding: 4px 8px;
+            border: 1px solid #D1D5DB;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .time-label {
+            font-size: 14px;
+            color: #6B7280;
+            min-width: 60px;
+        }
+
+        .preview-controls {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .preview-btn {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            background-color: #6B7280;
+            color: white;
+        }
+
+        .preview-btn:hover {
+            background-color: #4B5563;
+        }
+
+        .preview-btn.primary {
+            background-color: #3B82F6;
+        }
+
+        .preview-btn.primary:hover {
+            background-color: #2563EB;
         }
 
         .highlight-time {
@@ -183,6 +255,18 @@
         .export-btn:hover {
             background-color: #F9FAFB;
             color: #374151;
+        }
+
+        .export-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            background-color: #E5E7EB;
+            color: #9CA3AF;
+        }
+
+        .export-btn:disabled:hover {
+            background-color: #E5E7EB;
+            color: #9CA3AF;
         }
 
         .message {
@@ -236,8 +320,8 @@
         <div class="upload-section">
             <div class="upload-button" id="videoUpload">
                 <div class="upload-icon">🎬</div>
-                <span>上傳視頻</span>
-                <input type="file" id="videoFile" accept=".mp4,.avi,.mov,.mkv,.webm">
+                <span>上傳媒體</span>
+                <input type="file" id="videoFile" accept=".mp4,.avi,.mov,.mkv,.webm,.mp3,.wav,.m4a,.aac,.ogg">
             </div>
             
             <div class="upload-button" id="highlightsUpload">
@@ -248,15 +332,21 @@
         </div>
 
         <div class="video-section" id="videoSection">
-            <video class="video-player" id="videoPlayer" controls>
+            <video class="video-player" id="videoPlayer" controls style="display: none;">
                 您的瀏覽器不支援視頻播放
             </video>
+            <audio class="audio-player" id="audioPlayer" controls style="display: none;">
+                您的瀏覽器不支援音頻播放
+            </audio>
         </div>
 
         <div class="highlights-section" id="highlightsSection">
             <div class="highlights-header">
                 <h2 class="highlights-title">🔦 高亮摘要片段</h2>
-                <button class="export-all-btn" id="exportAllBtn">📤 導出全部摘要</button>
+                <div style="display: flex; gap: 8px;">
+                    <button class="export-all-btn" id="exportAllBtn">📤 導出全部摘要</button>
+                    <button class="export-all-btn" id="exportAllVideoBtn">🎬 導出全部視頻</button>
+                </div>
             </div>
             <div id="highlightsList"></div>
         </div>
@@ -284,6 +374,7 @@
 
             // 導出全部
             document.getElementById('exportAllBtn').addEventListener('click', exportAllHighlights);
+            document.getElementById('exportAllVideoBtn').addEventListener('click', exportAllVideoSegments);
         });
 
         function showMessage(text, type = 'success') {
@@ -314,12 +405,32 @@
                 if (data.success) {
                     currentVideo = data.filename;
                     document.getElementById('videoUpload').classList.add('active');
-                    document.getElementById('videoUpload').querySelector('span').textContent = '✓ 視頻已上傳';
+                    document.getElementById('videoUpload').querySelector('span').textContent = '✓ 媒體已上傳';
                     
-                    // 設置視頻播放器
+                    // 檢測文件類型並設置相應播放器
+                    const fileExtension = data.filename.split('.').pop().toLowerCase();
+                    const audioExtensions = ['mp3', 'wav', 'm4a', 'aac', 'ogg'];
+                    const isAudio = audioExtensions.includes(fileExtension);
+                    
                     const videoPlayer = document.getElementById('videoPlayer');
-                    videoPlayer.src = `/video/${data.filename}`;
+                    const audioPlayer = document.getElementById('audioPlayer');
+                    
+                    if (isAudio) {
+                        audioPlayer.src = `/video/${data.filename}`;
+                        audioPlayer.style.display = 'block';
+                        videoPlayer.style.display = 'none';
+                    } else {
+                        videoPlayer.src = `/video/${data.filename}`;
+                        videoPlayer.style.display = 'block';
+                        audioPlayer.style.display = 'none';
+                    }
+                    
                     document.getElementById('videoSection').style.display = 'block';
+                    
+                    // 處理現有文件和數據
+                    if (data.existing_files) {
+                        handleExistingFiles(data.existing_files, data.existing_data);
+                    }
                     
                     showMessage(data.message);
                 } else {
@@ -381,9 +492,38 @@
                         <button class="play-btn" onclick="playSegment(${highlight.start}, ${highlight.end})">
                             ▶️ 播放片段
                         </button>
+                        <button class="preview-btn primary" onclick="toggleTimeControls(${index})">
+                            ⚙️ 調整時間
+                        </button>
                         <button class="export-btn" onclick="exportHighlight(${index})">
                             📄 導出文字
                         </button>
+                        <button class="export-btn" onclick="exportVideoSegment(${index})" disabled>
+                            🎬 導出視頻
+                        </button>
+                    </div>
+                    <div class="time-controls" id="timeControls${index}">
+                        <div class="time-input-group">
+                            <span class="time-label">開始時間:</span>
+                            <input type="number" class="time-input" id="startTime${index}" value="${highlight.start.toFixed(1)}" step="0.1" min="0">
+                            <span style="font-size: 12px; color: #6B7280;">秒</span>
+                        </div>
+                        <div class="time-input-group">
+                            <span class="time-label">結束時間:</span>
+                            <input type="number" class="time-input" id="endTime${index}" value="${highlight.end.toFixed(1)}" step="0.1" min="0">
+                            <span style="font-size: 12px; color: #6B7280;">秒</span>
+                        </div>
+                        <div class="preview-controls">
+                            <button class="preview-btn primary" onclick="previewAdjustedSegment(${index})">
+                                ▶️ 預覽調整
+                            </button>
+                            <button class="preview-btn" onclick="resetTimeRange(${index})">
+                                🔄 重置
+                            </button>
+                            <button class="preview-btn primary" onclick="saveTimeAdjustment(${index})">
+                                ✅ 確認調整
+                            </button>
+                        </div>
                     </div>
                 `;
 
@@ -399,23 +539,28 @@
 
         function playSegment(start, end) {
             const videoPlayer = document.getElementById('videoPlayer');
-            if (!videoPlayer.src) {
-                showMessage('請先上傳視頻文件', 'error');
+            const audioPlayer = document.getElementById('audioPlayer');
+            
+            // 確定當前使用的播放器
+            const currentPlayer = videoPlayer.style.display !== 'none' ? videoPlayer : audioPlayer;
+            
+            if (!currentPlayer.src) {
+                showMessage('請先上傳媒體文件', 'error');
                 return;
             }
 
-            videoPlayer.currentTime = start;
-            videoPlayer.play();
+            currentPlayer.currentTime = start;
+            currentPlayer.play();
 
             // 設置結束時間監聽（可選）
             const handleTimeUpdate = () => {
-                if (videoPlayer.currentTime >= end) {
-                    videoPlayer.pause();
-                    videoPlayer.removeEventListener('timeupdate', handleTimeUpdate);
+                if (currentPlayer.currentTime >= end) {
+                    currentPlayer.pause();
+                    currentPlayer.removeEventListener('timeupdate', handleTimeUpdate);
                 }
             };
             
-            videoPlayer.addEventListener('timeupdate', handleTimeUpdate);
+            currentPlayer.addEventListener('timeupdate', handleTimeUpdate);
         }
 
         function exportHighlight(index) {
@@ -453,6 +598,34 @@
             .catch(error => {
                 showMessage('導出失敗: ' + error.message, 'error');
             });
+        }
+
+        function handleExistingFiles(existingFiles, existingData) {
+            // 處理轉錄文件
+            if (existingFiles.has_transcript && existingData.transcript) {
+                showMessage('✓ 發現現有轉錄文件', 'success');
+                // 可以在這裡顯示轉錄內容
+            }
+            
+            // 處理精華片段
+            if (existingFiles.has_segments && existingData.segments) {
+                showMessage('✓ 發現現有精華片段', 'success');
+                // 可以在這裡顯示片段信息
+            }
+            
+            // 處理標題數據  
+            if (existingFiles.has_titles && existingData.titles) {
+                showMessage('✓ 發現現有標題數據', 'success');
+                
+                // 自動載入精華片段到前端
+                if (existingData.titles.highlights) {
+                    currentHighlights = existingData.titles.highlights;
+                    renderHighlights(existingData.titles.highlights);
+                    document.getElementById('highlightsSection').style.display = 'block';
+                    document.getElementById('highlightsUpload').classList.add('active');
+                    document.getElementById('highlightsUpload').querySelector('span').textContent = '✓ 已載入現有精華';
+                }
+            }
         }
 
         function exportAllHighlights() {
@@ -493,6 +666,163 @@
             })
             .catch(error => {
                 showMessage('導出失敗: ' + error.message, 'error');
+            });
+        }
+
+        function exportVideoSegment(index) {
+            if (!currentVideo) {
+                showMessage('請先上傳視頻文件', 'error');
+                return;
+            }
+
+            const highlight = currentHighlights[index];
+            const data = {
+                video_filename: currentVideo,
+                highlight: highlight
+            };
+
+            fetch('/export-video-segment', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage(data.message);
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showMessage('導出失敗: ' + error.message, 'error');
+            });
+        }
+
+        function toggleTimeControls(index) {
+            const card = document.querySelectorAll('.highlight-card')[index];
+            const timeControls = document.getElementById(`timeControls${index}`);
+            
+            // 切換展開狀態
+            card.classList.toggle('expanded');
+            timeControls.classList.toggle('show');
+            
+            // 更新按鈕文字
+            const toggleBtn = card.querySelector('.preview-btn.primary');
+            if (timeControls.classList.contains('show')) {
+                toggleBtn.textContent = '🔼 收起調整';
+            } else {
+                toggleBtn.textContent = '⚙️ 調整時間';
+            }
+        }
+
+        function previewAdjustedSegment(index) {
+            const startInput = document.getElementById(`startTime${index}`);
+            const endInput = document.getElementById(`endTime${index}`);
+            
+            const startTime = parseFloat(startInput.value);
+            const endTime = parseFloat(endInput.value);
+            
+            if (startTime >= endTime) {
+                showMessage('開始時間必須小於結束時間', 'error');
+                return;
+            }
+            
+            if (endTime - startTime < 5) {
+                showMessage('片段長度至少需要5秒', 'error');
+                return;
+            }
+            
+            // 播放調整後的片段
+            playSegment(startTime, endTime);
+            showMessage(`預覽片段: ${formatTime(startTime)} - ${formatTime(endTime)}`);
+        }
+
+        function resetTimeRange(index) {
+            const originalHighlight = currentHighlights[index];
+            document.getElementById(`startTime${index}`).value = originalHighlight.start.toFixed(1);
+            document.getElementById(`endTime${index}`).value = originalHighlight.end.toFixed(1);
+            showMessage('時間範圍已重置');
+        }
+
+        function saveTimeAdjustment(index) {
+            const startInput = document.getElementById(`startTime${index}`);
+            const endInput = document.getElementById(`endTime${index}`);
+            
+            const startTime = parseFloat(startInput.value);
+            const endTime = parseFloat(endInput.value);
+            
+            if (startTime >= endTime) {
+                showMessage('開始時間必須小於結束時間', 'error');
+                return;
+            }
+            
+            if (endTime - startTime < 5) {
+                showMessage('片段長度至少需要5秒', 'error');
+                return;
+            }
+            
+            // 更新 currentHighlights 數據
+            currentHighlights[index].start = startTime;
+            currentHighlights[index].end = endTime;
+            
+            // 更新顯示的時間
+            const card = document.querySelectorAll('.highlight-card')[index];
+            const timeDisplay = card.querySelector('.highlight-time');
+            const duration = Math.round(endTime - startTime);
+            timeDisplay.textContent = `${formatTime(startTime)} - ${formatTime(endTime)} (${duration}秒)`;
+            
+            // 啟用導出按鈕
+            const exportBtn = card.querySelector('button[onclick*="exportVideoSegment"]');
+            exportBtn.disabled = false;
+            exportBtn.style.opacity = '1';
+            
+            // 收起調整面板
+            toggleTimeControls(index);
+            
+            showMessage('時間調整已保存，可以導出視頻');
+        }
+
+        function exportAllVideoSegments() {
+            if (!currentVideo) {
+                showMessage('請先上傳視頻文件', 'error');
+                return;
+            }
+
+            if (currentHighlights.length === 0) {
+                showMessage('沒有可導出的精華片段', 'error');
+                return;
+            }
+
+            const data = {
+                video_filename: currentVideo,
+                highlights: currentHighlights
+            };
+
+            showMessage('開始批量導出視頻片段，請稍候...', 'success');
+
+            fetch('/export-all-video-segments', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showMessage(data.message);
+                    if (data.failed_exports && data.failed_exports.length > 0) {
+                        showMessage(`失敗項目: ${data.failed_exports.join(', ')}`, 'error');
+                    }
+                } else {
+                    showMessage(data.error, 'error');
+                }
+            })
+            .catch(error => {
+                showMessage('批量導出失敗: ' + error.message, 'error');
             });
         }
     </script>
